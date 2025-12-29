@@ -1,0 +1,6 @@
+Unknown
+Palutena
+high
+Player 1 (left side): Zombie
+Player 2 (right side): Palutena
+Confidence: high

@@ -1,0 +1,6 @@
+Steve
+Palutena
+high
+Player 1 (left side): Steve
+Player 2 (right side): Palutena
+Confidence: High

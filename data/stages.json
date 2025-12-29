@@ -1,0 +1,169 @@
+{
+  "stages": [
+    {
+      "id": "small_battlefield",
+      "name": "Small Battlefield",
+      "platforms": 2,
+      "geometry": {
+        "left_ledge": [0.28, 0.72],
+        "right_ledge": [0.72, 0.72],
+        "left_blast_zone": 0.05,
+        "right_blast_zone": 0.95,
+        "main_stage_y": 0.72,
+        "platforms": [
+          {"x": 0.35, "y": 0.55, "width": 0.15},
+          {"x": 0.65, "y": 0.55, "width": 0.15}
+        ]
+      },
+      "detection": {
+        "primary_hue_range": [15, 35],
+        "secondary_hue_range": [100, 130],
+        "avg_saturation_range": [40, 80]
+      }
+    },
+    {
+      "id": "battlefield",
+      "name": "Battlefield",
+      "platforms": 3,
+      "geometry": {
+        "left_ledge": [0.25, 0.72],
+        "right_ledge": [0.75, 0.72],
+        "left_blast_zone": 0.05,
+        "right_blast_zone": 0.95,
+        "main_stage_y": 0.72,
+        "platforms": [
+          {"x": 0.30, "y": 0.55, "width": 0.12},
+          {"x": 0.50, "y": 0.40, "width": 0.12},
+          {"x": 0.70, "y": 0.55, "width": 0.12}
+        ]
+      },
+      "detection": {
+        "primary_hue_range": [15, 35],
+        "secondary_hue_range": [100, 130],
+        "avg_saturation_range": [40, 80]
+      }
+    },
+    {
+      "id": "final_destination",
+      "name": "Final Destination",
+      "platforms": 0,
+      "geometry": {
+        "left_ledge": [0.22, 0.72],
+        "right_ledge": [0.78, 0.72],
+        "left_blast_zone": 0.05,
+        "right_blast_zone": 0.95,
+        "main_stage_y": 0.72,
+        "platforms": []
+      },
+      "detection": {
+        "primary_hue_range": [100, 140],
+        "secondary_hue_range": [0, 20],
+        "avg_saturation_range": [30, 70]
+      }
+    },
+    {
+      "id": "town_and_city",
+      "name": "Town and City",
+      "platforms": 2,
+      "geometry": {
+        "left_ledge": [0.25, 0.72],
+        "right_ledge": [0.75, 0.72],
+        "left_blast_zone": 0.05,
+        "right_blast_zone": 0.95,
+        "main_stage_y": 0.72,
+        "platforms": [
+          {"x": 0.35, "y": 0.50, "width": 0.15},
+          {"x": 0.65, "y": 0.50, "width": 0.15}
+        ]
+      },
+      "detection": {
+        "primary_hue_range": [90, 130],
+        "secondary_hue_range": [20, 50],
+        "avg_saturation_range": [30, 60]
+      }
+    },
+    {
+      "id": "smashville",
+      "name": "Smashville",
+      "platforms": 1,
+      "geometry": {
+        "left_ledge": [0.26, 0.72],
+        "right_ledge": [0.74, 0.72],
+        "left_blast_zone": 0.05,
+        "right_blast_zone": 0.95,
+        "main_stage_y": 0.72,
+        "platforms": [
+          {"x": 0.50, "y": 0.52, "width": 0.18}
+        ]
+      },
+      "detection": {
+        "primary_hue_range": [90, 130],
+        "secondary_hue_range": [30, 60],
+        "avg_saturation_range": [40, 70]
+      }
+    },
+    {
+      "id": "hollow_bastion",
+      "name": "Hollow Bastion",
+      "platforms": 2,
+      "geometry": {
+        "left_ledge": [0.25, 0.72],
+        "right_ledge": [0.75, 0.72],
+        "left_blast_zone": 0.05,
+        "right_blast_zone": 0.95,
+        "main_stage_y": 0.72,
+        "platforms": [
+          {"x": 0.35, "y": 0.52, "width": 0.12},
+          {"x": 0.65, "y": 0.52, "width": 0.12}
+        ]
+      },
+      "detection": {
+        "primary_hue_range": [120, 160],
+        "secondary_hue_range": [0, 30],
+        "avg_saturation_range": [20, 50]
+      }
+    },
+    {
+      "id": "kalos_pokemon_league",
+      "name": "Kalos Pokemon League",
+      "platforms": 2,
+      "geometry": {
+        "left_ledge": [0.24, 0.72],
+        "right_ledge": [0.76, 0.72],
+        "left_blast_zone": 0.05,
+        "right_blast_zone": 0.95,
+        "main_stage_y": 0.72,
+        "platforms": [
+          {"x": 0.35, "y": 0.52, "width": 0.12},
+          {"x": 0.65, "y": 0.52, "width": 0.12}
+        ]
+      },
+      "detection": {
+        "primary_hue_range": [90, 120],
+        "secondary_hue_range": [40, 70],
+        "avg_saturation_range": [50, 80]
+      }
+    },
+    {
+      "id": "pokemon_stadium_2",
+      "name": "Pokemon Stadium 2",
+      "platforms": 2,
+      "geometry": {
+        "left_ledge": [0.24, 0.72],
+        "right_ledge": [0.76, 0.72],
+        "left_blast_zone": 0.05,
+        "right_blast_zone": 0.95,
+        "main_stage_y": 0.72,
+        "platforms": [
+          {"x": 0.35, "y": 0.52, "width": 0.12},
+          {"x": 0.65, "y": 0.52, "width": 0.12}
+        ]
+      },
+      "detection": {
+        "primary_hue_range": [90, 120],
+        "secondary_hue_range": [0, 30],
+        "avg_saturation_range": [40, 70]
+      }
+    }
+  ]
+}

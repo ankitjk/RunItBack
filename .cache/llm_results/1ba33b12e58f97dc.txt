@@ -1,0 +1,6 @@
+Steve
+Byleth
+high
+Player 1 (left side): Steve
+Player 2 (right side): Byleth
+Confidence: high

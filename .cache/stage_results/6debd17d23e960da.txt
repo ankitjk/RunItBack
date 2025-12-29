@@ -1,0 +1,4 @@
+Pokemon Stadium 2
+high
+Stage: Pokemon Stadium 2
+Confidence: high

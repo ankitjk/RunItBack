@@ -1,0 +1,6 @@
+Mario
+Ness
+high
+Player 1 (left side): Mario
+Player 2 (right side): Ness
+Confidence: high

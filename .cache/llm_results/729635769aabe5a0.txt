@@ -1,0 +1,6 @@
+Mii Brawler
+Palutena
+high
+Player 1 (left side): Mii Brawler
+Player 2 (right side): Palutena
+Confidence: high

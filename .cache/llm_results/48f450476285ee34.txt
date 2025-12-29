@@ -1,0 +1,6 @@
+Dark Pit
+Ken
+high
+Player 1 (left side): Dark Pit
+Player 2 (right side): Ken
+Confidence: high

@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "runitback"
+version = "0.1.0"
+description = "Analyze Super Smash Bros. Ultimate replays from YouTube"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "Ankit" }
+]
+keywords = ["ssbu", "smash", "replay", "analysis", "esports"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Games/Entertainment",
+]
+dependencies = [
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "yt-dlp>=2024.1.0",
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+    "paddleocr>=2.7.0",
+    "paddlepaddle>=2.5.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "google-generativeai>=0.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+runitback = "runitback.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["runitback"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true

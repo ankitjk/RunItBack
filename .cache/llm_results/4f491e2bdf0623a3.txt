@@ -1,0 +1,6 @@
+Pit
+Ken
+high
+Player 1 (left side): Pit
+Player 2 (right side): Ken
+Confidence: high

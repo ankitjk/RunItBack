@@ -1,0 +1,6 @@
+Pyra/Mythra
+Ken
+high
+Player 1 (left side): Pyra
+Player 2 (right side): Ken
+Confidence: high

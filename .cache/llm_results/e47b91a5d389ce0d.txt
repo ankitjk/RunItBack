@@ -1,0 +1,6 @@
+Ken
+Sonic
+high
+Player 1 (left side): Ken
+Player 2 (right side): Sonic
+Confidence: high
