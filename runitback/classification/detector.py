@@ -205,6 +205,14 @@ class GameStateDetector:
         last_p2_stock_loss_time: Optional[float] = None
         STOCK_LOSS_COOLDOWN = 10.0  # Seconds before another stock loss can be detected for same player
 
+        # Track consecutive low-damage frames to confirm stock loss
+        # (helps filter OCR noise where damage briefly reads as 0)
+        p1_low_damage_frames = 0
+        p2_low_damage_frames = 0
+        p1_high_damage_before_low: Optional[float] = None  # Damage before low streak started
+        p2_high_damage_before_low: Optional[float] = None
+        CONFIRM_FRAMES = 2  # Require 2 consecutive low frames (1 second at 0.5s interval)
+
         for fs in frame_states:
             # Calculate damage deltas
             p1_delta = 0.0
@@ -218,7 +226,7 @@ class GameStateDetector:
 
             # Detect stock losses using damage reset as primary indicator
             # When a player loses a stock, their damage resets to 0%
-            # We detect this by looking for damage drops of 50+ to near-zero
+            # Require consecutive low damage frames to filter OCR noise
             cooldown_p1_ok = (
                 last_p1_stock_loss_time is None or
                 fs.timestamp - last_p1_stock_loss_time >= STOCK_LOSS_COOLDOWN
@@ -228,19 +236,41 @@ class GameStateDetector:
                 fs.timestamp - last_p2_stock_loss_time >= STOCK_LOSS_COOLDOWN
             )
 
-            # P1 stock loss: damage dropped significantly and is now near 0
-            if (fs.p1_damage is not None and prev_p1_damage is not None and
-                prev_p1_damage >= 30 and fs.p1_damage <= 5 and cooldown_p1_ok):
+            # Track P1 low damage frames and remember high damage before the streak
+            if fs.p1_damage is not None and fs.p1_damage <= 5:
+                if p1_low_damage_frames == 0 and prev_p1_damage is not None:
+                    p1_high_damage_before_low = prev_p1_damage
+                p1_low_damage_frames += 1
+            else:
+                p1_low_damage_frames = 0
+                p1_high_damage_before_low = None
+
+            # Track P2 low damage frames and remember high damage before the streak
+            if fs.p2_damage is not None and fs.p2_damage <= 5:
+                if p2_low_damage_frames == 0 and prev_p2_damage is not None:
+                    p2_high_damage_before_low = prev_p2_damage
+                p2_low_damage_frames += 1
+            else:
+                p2_low_damage_frames = 0
+                p2_high_damage_before_low = None
+
+            # P1 stock loss: confirm only after consecutive low damage frames
+            # and only if damage was high (>= 30%) before the low streak
+            if (p1_low_damage_frames == CONFIRM_FRAMES and
+                p1_high_damage_before_low is not None and
+                p1_high_damage_before_low >= 30 and cooldown_p1_ok):
                 p1_stock_loss = True
                 last_p1_stock_loss_time = fs.timestamp
-                logger.debug(f"P1 stock loss: {prev_p1_damage:.0f}% -> {fs.p1_damage:.0f}% at {fs.timestamp:.1f}s")
+                logger.debug(f"P1 stock loss confirmed: {p1_high_damage_before_low:.0f}% -> low at {fs.timestamp:.1f}s")
 
-            # P2 stock loss: damage dropped significantly and is now near 0
-            if (fs.p2_damage is not None and prev_p2_damage is not None and
-                prev_p2_damage >= 30 and fs.p2_damage <= 5 and cooldown_p2_ok):
+            # P2 stock loss: confirm only after consecutive low damage frames
+            # and only if damage was high (>= 30%) before the low streak
+            if (p2_low_damage_frames == CONFIRM_FRAMES and
+                p2_high_damage_before_low is not None and
+                p2_high_damage_before_low >= 30 and cooldown_p2_ok):
                 p2_stock_loss = True
                 last_p2_stock_loss_time = fs.timestamp
-                logger.debug(f"P2 stock loss: {prev_p2_damage:.0f}% -> {fs.p2_damage:.0f}% at {fs.timestamp:.1f}s")
+                logger.debug(f"P2 stock loss confirmed: {p2_high_damage_before_low:.0f}% -> low at {fs.timestamp:.1f}s")
 
             # Calculate damage deltas for hit detection
             if fs.p1_damage is not None and prev_p1_damage is not None:
