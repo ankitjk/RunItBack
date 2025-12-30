@@ -19,16 +19,14 @@ def get_ocr():
     if _ocr_instance is None:
         from paddleocr import PaddleOCR
 
-        # Use English model, disable angle classification for speed
-        # Note: Newer PaddleOCR versions have different API - use minimal params
-        try:
-            _ocr_instance = PaddleOCR(
-                use_angle_cls=False,
-                lang="en",
-            )
-        except TypeError:
-            # Fallback for even newer versions with different API
-            _ocr_instance = PaddleOCR(lang="en")
+        # Use English model with document preprocessor disabled
+        # to avoid unwanted rotation of game UI elements
+        _ocr_instance = PaddleOCR(
+            lang="en",
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+        )
     return _ocr_instance
 
 
@@ -108,7 +106,7 @@ def extract_damage_value(text: str) -> Optional[float]:
 
 def read_damage_percentage(
     roi: np.ndarray,
-    confidence_threshold: float = 0.5,
+    confidence_threshold: float = 0.3,
 ) -> tuple[Optional[float], float]:
     """Read damage percentage from an image region.
 
@@ -122,46 +120,38 @@ def read_damage_percentage(
     if roi is None or roi.size == 0:
         return None, 0.0
 
-    # Preprocess the image
-    processed = preprocess_damage_roi(roi)
-
-    # Convert back to BGR for PaddleOCR (it expects BGR)
-    processed_bgr = cv2.cvtColor(processed, cv2.COLOR_GRAY2BGR)
-
     try:
         ocr = get_ocr()
-        # New PaddleOCR API uses predict() internally via ocr()
-        # Don't pass cls parameter as it's not supported in newer versions
-        results = ocr.ocr(processed_bgr)
+        # Use predict() for newer PaddleOCR versions
+        # Pass the original ROI directly - PaddleOCR handles preprocessing
+        results = ocr.predict(roi)
 
-        if not results or not results[0]:
+        if not results or len(results) == 0:
+            return None, 0.0
+
+        # New API returns OCRResult objects with rec_texts and rec_scores
+        result = results[0]
+
+        # Handle new OCRResult format
+        if hasattr(result, 'rec_texts'):
+            texts = result.rec_texts
+            scores = result.rec_scores
+        elif hasattr(result, 'keys'):
+            # Dict-like result
+            texts = result.get('rec_texts', [])
+            scores = result.get('rec_scores', [])
+        else:
+            # Try old format
+            return _read_damage_old_format(results, confidence_threshold)
+
+        if not texts:
             return None, 0.0
 
         # Combine all detected text
-        all_text = ""
-        total_confidence = 0.0
-        count = 0
+        all_text = " ".join(texts)
+        avg_confidence = sum(scores) / len(scores) if scores else 0.0
 
-        for line in results[0]:
-            if line and len(line) >= 2:
-                # Handle both old format (text, confidence) and new format
-                text_info = line[1]
-                if isinstance(text_info, tuple):
-                    text, confidence = text_info
-                elif isinstance(text_info, dict):
-                    text = text_info.get("text", "")
-                    confidence = text_info.get("score", 0.0)
-                else:
-                    text = str(text_info)
-                    confidence = 0.5
-                all_text += text
-                total_confidence += confidence
-                count += 1
-
-        if count == 0:
-            return None, 0.0
-
-        avg_confidence = total_confidence / count
+        logger.debug(f"OCR detected: '{all_text}' (conf: {avg_confidence:.2f})")
 
         if avg_confidence < confidence_threshold:
             logger.debug(f"Low OCR confidence: {avg_confidence:.2f} for text: {all_text}")
@@ -173,6 +163,42 @@ def read_damage_percentage(
     except Exception as e:
         logger.warning(f"OCR error: {e}")
         return None, 0.0
+
+
+def _read_damage_old_format(results, confidence_threshold: float) -> tuple[Optional[float], float]:
+    """Handle old PaddleOCR result format for backward compatibility."""
+    if not results or not results[0]:
+        return None, 0.0
+
+    all_text = ""
+    total_confidence = 0.0
+    count = 0
+
+    for line in results[0]:
+        if line and len(line) >= 2:
+            text_info = line[1]
+            if isinstance(text_info, tuple):
+                text, confidence = text_info
+            elif isinstance(text_info, dict):
+                text = text_info.get("text", "")
+                confidence = text_info.get("score", 0.0)
+            else:
+                text = str(text_info)
+                confidence = 0.5
+            all_text += text
+            total_confidence += confidence
+            count += 1
+
+    if count == 0:
+        return None, 0.0
+
+    avg_confidence = total_confidence / count
+
+    if avg_confidence < confidence_threshold:
+        return None, avg_confidence
+
+    damage = extract_damage_value(all_text)
+    return damage, avg_confidence
 
 
 def read_damage_with_fallback(

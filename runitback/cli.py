@@ -11,6 +11,8 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from runitback.classification.detector import GameStateDetector, format_analysis_output
+from runitback.classification.states import GameState, GameStateAnalysis
 from runitback.config import settings
 from runitback.cv.character_detector import detect_characters_from_frames, MatchCharacters
 from runitback.cv.stage_detector import Stage
@@ -63,6 +65,69 @@ def validate_youtube_url(url: str) -> bool:
         r"^https?://(www\.)?youtube\.com/live/[\w-]+",
     ]
     return any(re.match(pattern, url) for pattern in youtube_patterns)
+
+
+def parse_games_option(games_str: str, total_games: int) -> list[int]:
+    """Parse the --games option string into a list of game numbers.
+
+    Supports formats:
+    - "1" - single game
+    - "1,3" - comma-separated games
+    - "2-4" - range of games
+    - "1,3-5" - mixed format
+
+    Args:
+        games_str: The games option string
+        total_games: Total number of games detected
+
+    Returns:
+        Sorted list of game numbers to analyze
+
+    Raises:
+        typer.BadParameter: If the format is invalid or games don't exist
+    """
+    if not games_str:
+        return list(range(1, total_games + 1))  # All games
+
+    game_numbers: set[int] = set()
+
+    parts = games_str.split(",")
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+
+        if "-" in part:
+            # Range format: "2-4"
+            range_parts = part.split("-")
+            if len(range_parts) != 2:
+                raise typer.BadParameter(f"Invalid range format: '{part}'")
+            try:
+                start = int(range_parts[0].strip())
+                end = int(range_parts[1].strip())
+            except ValueError:
+                raise typer.BadParameter(f"Invalid range format: '{part}'")
+
+            if start > end:
+                raise typer.BadParameter(f"Invalid range: start ({start}) > end ({end})")
+
+            for i in range(start, end + 1):
+                game_numbers.add(i)
+        else:
+            # Single game number
+            try:
+                game_numbers.add(int(part))
+            except ValueError:
+                raise typer.BadParameter(f"Invalid game number: '{part}'")
+
+    # Validate all game numbers exist
+    for num in game_numbers:
+        if num < 1 or num > total_games:
+            raise typer.BadParameter(
+                f"Game {num} does not exist. Found {total_games} game(s)."
+            )
+
+    return sorted(game_numbers)
 
 
 def prompt_player_perspective() -> int:
@@ -506,6 +571,87 @@ def display_game_summary(
     console.print()
 
 
+def display_state_analysis(analysis: GameStateAnalysis) -> None:
+    """Display the state analysis for a game.
+
+    Args:
+        analysis: The GameStateAnalysis result
+    """
+    # Summary stats
+    total_time = analysis.total_analyzed_time
+    if total_time > 0:
+        neutral_pct = (analysis.total_neutral_time / total_time) * 100
+        adv_pct = (analysis.total_advantage_time / total_time) * 100
+        disadv_pct = (analysis.total_disadvantage_time / total_time) * 100
+
+        console.print("[bold]STATE SUMMARY:[/bold]")
+        console.print(
+            f"  [white]Neutral:[/white]      "
+            f"{format_timestamp(analysis.total_neutral_time)} ({neutral_pct:.0f}%)"
+        )
+        console.print(
+            f"  [green]Advantage:[/green]    "
+            f"{format_timestamp(analysis.total_advantage_time)} ({adv_pct:.0f}%)"
+        )
+        console.print(
+            f"  [red]Disadvantage:[/red] "
+            f"{format_timestamp(analysis.total_disadvantage_time)} ({disadv_pct:.0f}%)"
+        )
+        console.print()
+
+    # Helper to format stock loss notes for a segment
+    def format_stock_losses(seg, player_perspective: int) -> str:
+        """Format stock loss notes for display."""
+        if not seg.stock_losses:
+            return ""
+        notes = []
+        for loss in seg.stock_losses:
+            if loss.player == player_perspective:
+                notes.append("[red]★ You lost a stock[/red]")
+            else:
+                notes.append("[green]★ Opponent lost a stock[/green]")
+        return " ".join(notes)
+
+    # Neutral segments
+    if analysis.neutral_segments:
+        console.print("[bold]NEUTRAL SEGMENTS:[/bold]")
+        for seg in analysis.neutral_segments:
+            start = format_timestamp(seg.start_time)
+            end = format_timestamp(seg.end_time)
+            stock_notes = format_stock_losses(seg, analysis.player_perspective)
+            if stock_notes:
+                console.print(f"  {start} - {end}  {stock_notes}")
+            else:
+                console.print(f"  {start} - {end}")
+        console.print()
+
+    # Advantage segments
+    if analysis.advantage_segments:
+        console.print("[bold green]ADVANTAGE SEGMENTS:[/bold green]")
+        for seg in analysis.advantage_segments:
+            start = format_timestamp(seg.start_time)
+            end = format_timestamp(seg.end_time)
+            stock_notes = format_stock_losses(seg, analysis.player_perspective)
+            if stock_notes:
+                console.print(f"  {start} - {end}  {stock_notes}")
+            else:
+                console.print(f"  {start} - {end}")
+        console.print()
+
+    # Disadvantage segments
+    if analysis.disadvantage_segments:
+        console.print("[bold red]DISADVANTAGE SEGMENTS:[/bold red]")
+        for seg in analysis.disadvantage_segments:
+            start = format_timestamp(seg.start_time)
+            end = format_timestamp(seg.end_time)
+            stock_notes = format_stock_losses(seg, analysis.player_perspective)
+            if stock_notes:
+                console.print(f"  {start} - {end}  {stock_notes}")
+            else:
+                console.print(f"  {start} - {end}")
+        console.print()
+
+
 @app.command()
 def analyze(
     url: Annotated[str, typer.Argument(help="YouTube URL of the SSBU replay")],
@@ -517,6 +663,14 @@ def analyze(
             help="Player perspective (1 or 2). If not provided, you'll be prompted.",
             min=1,
             max=2,
+        ),
+    ] = None,
+    games: Annotated[
+        Optional[str],
+        typer.Option(
+            "--games",
+            "-g",
+            help="Games to analyze (e.g., '1', '1,3', '2-4'). Defaults to all games.",
         ),
     ] = None,
     sample_rate: Annotated[
@@ -624,28 +778,68 @@ def analyze(
         console=console,
     ) as progress:
         progress.add_task("Analyzing gameplay...", total=None)
-        games = detect_games(
+        detected_games = detect_games(
             frames,
             verbose=verbose,
             p1_hints=p1_hints,
             p2_hints=p2_hints,
         )
 
-    if not games:
+    if not detected_games:
         console.print("[yellow]No games detected in video.[/yellow]")
         console.print("This might happen if the video doesn't contain SSBU gameplay.")
         raise typer.Exit(0)
 
-    # Display results
-    console.print(f"\n[bold]Found {len(games)} game(s)[/bold]\n")
-    console.print("=" * 50)
+    # Parse and validate --games option
+    try:
+        games_to_analyze = parse_games_option(games, len(detected_games))
+    except typer.BadParameter as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
 
-    for game in games:
+    # Display results
+    console.print(f"\n[bold]Found {len(detected_games)} game(s)[/bold]")
+    if games:
+        console.print(f"[dim]Analyzing game(s): {', '.join(str(g) for g in games_to_analyze)}[/dim]")
+    console.print()
+
+    # Initialize state detector
+    state_detector = GameStateDetector(
+        player_perspective=player,
+        hit_threshold=4.0,  # Minimum damage to count as a hit
+        neutral_reset_time=3.0,  # Seconds without damage to return to neutral
+    )
+
+    # Analyze each selected game
+    for game in detected_games:
+        if game.game_number not in games_to_analyze:
+            continue
+
+        console.print("=" * 50)
         display_game_summary(game, player)
 
-    # Note about future features
-    console.print("[dim]Note: Game state classification (neutral/advantage/disadvantage),[/dim]")
-    console.print("[dim]edgeguard detection, and ledgetrap detection coming soon.[/dim]")
+        # Extract frames for this game's time range
+        game_frames = [
+            f for f in frames
+            if game.start_timestamp <= f.timestamp <= game.end_timestamp
+        ]
+
+        if not game_frames:
+            console.print("[yellow]No frames found for this game.[/yellow]")
+            continue
+
+        # Run state detection
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            progress.add_task(f"Analyzing game {game.game_number} states...", total=None)
+            analysis = state_detector.detect_states(game_frames, frame_interval=sample_rate)
+
+        # Display state analysis
+        if analysis.frame_states:
+            display_state_analysis(analysis)
 
 
 @app.command()

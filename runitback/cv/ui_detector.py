@@ -69,8 +69,10 @@ class UIState:
 
 # Damage percentage regions (bottom of screen)
 # Format: (x_start, y_start, x_end, y_end) as fractions of frame dimensions
-P1_DAMAGE_ROI = (0.12, 0.88, 0.28, 0.97)  # Player 1 (left side)
-P2_DAMAGE_ROI = (0.72, 0.88, 0.88, 0.97)  # Player 2 (right side)
+# The damage numbers appear as large text near center-bottom of screen
+# P1 damage ~27-44% from left, P2 damage ~64-76% from left
+P1_DAMAGE_ROI = (0.27, 0.87, 0.44, 0.98)  # Player 1 (left-center)
+P2_DAMAGE_ROI = (0.64, 0.87, 0.76, 0.98)  # Player 2 (right-center)
 
 # Stock indicator regions (just above damage)
 P1_STOCKS_ROI = (0.14, 0.82, 0.26, 0.88)
@@ -742,6 +744,23 @@ def detect_frame_type(frame: np.ndarray) -> FrameType:
         return FrameType.COUNTDOWN
 
     return FrameType.MENU
+
+
+def detect_stock_counts(frame: np.ndarray) -> tuple[int, int]:
+    """Detect current stock counts for both players from the HUD.
+
+    This reads the stock icons displayed below/near each player's damage
+    percentage. Stock icons are bright when active and dim/gone when lost.
+
+    Args:
+        frame: Full video frame (BGR)
+
+    Returns:
+        Tuple of (p1_stocks, p2_stocks)
+    """
+    p1_stocks = count_stocks(frame, player=1)
+    p2_stocks = count_stocks(frame, player=2)
+    return p1_stocks, p2_stocks
 
 
 def save_debug_rois(
