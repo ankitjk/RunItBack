@@ -2,9 +2,35 @@
 
 This file contains important information for AI assistants and developers working on this project.
 
+**For detailed development history, see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)**
+
 ## Project Overview
 
-RunItBack is a Python CLI tool that analyzes Super Smash Bros. Ultimate (SSBU) replays from YouTube URLs. It identifies games within sets, detects stages and characters, and will eventually classify game states (neutral/advantage/disadvantage), edgeguarding, and ledgetrapping situations.
+RunItBack is a Python CLI tool that analyzes Super Smash Bros. Ultimate (SSBU) replays from YouTube URLs. It identifies games within sets, detects stages and characters, and classifies game states (neutral/advantage/disadvantage) with stock loss tracking.
+
+## Current Status (December 2024)
+
+### Working Features
+- ✅ Video download from YouTube (yt-dlp)
+- ✅ Frame extraction at configurable intervals
+- ✅ Game boundary detection (GO!/GAME! markers + HUD detection)
+- ✅ Character detection (Gemini API + template matching fallback)
+- ✅ **Game state detection** (neutral/advantage/disadvantage) via damage tracking
+- ✅ **Stock loss tracking** with segment annotations
+
+### Detection Approach
+- **Damage Tracking**: PaddleOCR reads damage percentages every 0.5s
+- **State Classification**: Based on who took damage (advantage = you hit them)
+- **Stock Loss Detection**: Confirmed by 2 consecutive low-damage frames after high damage
+- **Segment Filtering**: Minimum duration thresholds reduce noise (1s neutral, 1.5s adv/disadv)
+
+### Key Parameters
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `hit_threshold` | 4.0 | Min damage increase to count as hit |
+| `neutral_reset_time` | 3.0s | Time without damage to return to neutral |
+| `STOCK_LOSS_COOLDOWN` | 10.0s | Min time between stock losses per player |
+| `CONFIRM_FRAMES` | 2 | Consecutive low-damage frames to confirm stock loss |
 
 ## Tournament-Legal Stages (Hazards Off)
 
@@ -99,10 +125,23 @@ Future enhancements:
 
 ## Key Files
 
-- `runitback/cv/stage_detector.py`: Stage detection with histogram matching and platform counting
-- `runitback/cv/ui_detector.py`: HUD detection and frame type classification
-- `runitback/cv/character_detector.py`: Character detection (Gemini + fallback template matching)
-- `runitback/cv/llm_detector.py`: Gemini Vision API integration for character detection
-- `runitback/cli.py`: CLI interface and game detection logic
-- `data/stage_references/`: Stage reference images for matching
-- `data/character_references/`: Character reference images for template matching fallback
+| File | Purpose |
+|------|---------|
+| `runitback/cli.py` | CLI interface and game detection logic |
+| `runitback/classification/detector.py` | **Game state detection** (neutral/advantage/disadvantage) |
+| `runitback/classification/states.py` | Data structures (GameState, FrameState, StateSegment, StockLoss) |
+| `runitback/cv/ocr.py` | PaddleOCR damage percentage reading |
+| `runitback/cv/ui_detector.py` | HUD detection, stock counting, frame type classification |
+| `runitback/cv/stage_detector.py` | Stage detection with histogram matching and platform counting |
+| `runitback/cv/character_detector.py` | Character detection (Gemini + fallback template matching) |
+| `runitback/cv/llm_detector.py` | Gemini Vision API integration |
+| `data/stage_references/` | Stage reference images for matching |
+| `data/character_references/` | Character reference images for template matching fallback |
+| `docs/DEVELOPMENT.md` | **Development chronicle** - methods tried, what worked/didn't |
+
+## Known Limitations
+
+1. **OCR Accuracy**: Damage reading can have errors during visual effects or motion blur
+2. **Stock Loss Detection**: Relies on damage reset pattern; may miss edge cases
+3. **Stage Detection**: Battlefield vs Small Battlefield disambiguation can be unreliable
+4. **No Edgeguard/Ledgetrap Detection**: Requires character position tracking (future work)

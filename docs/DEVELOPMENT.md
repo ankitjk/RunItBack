@@ -1,0 +1,411 @@
+# RunItBack Development Documentation
+
+This document chronicles the development process for RunItBack, including methods tried, what worked, what didn't, and the current state of the codebase.
+
+**Last Updated:** December 30, 2024
+
+---
+
+## Changelog
+
+### December 30, 2024 - Stock Loss Tracking Implementation
+
+**Session Goal:** Add stock loss tracking to game state analysis
+
+**Features Added:**
+- `StockLoss` dataclass to track stock loss events with timestamp and player
+- `stock_losses` field on `StateSegment` to attach losses to segments
+- `p1_stock_loss` / `p2_stock_loss` flags on `FrameState`
+- Display of stock losses in CLI output with colored stars (★ You lost a stock / ★ Opponent lost a stock)
+
+**Stock Loss Detection - Methods Attempted:**
+
+| Attempt | Method | Result |
+|---------|--------|--------|
+| 1 | Simple damage reset (`prev >= 50, curr <= 5`) | ❌ Too noisy - OCR errors caused 15+ false positives per game |
+| 2 | Stock splash screen OCR ("2-3" pattern) | ❌ Unreliable - splash has transparency, slow, final stock shows GAME! |
+| 3 | HUD stock icon counting via brightness | ❌ Values flickered (3→1→3→2→3) due to stage backgrounds |
+| 4 | **Consecutive frame confirmation** | ✅ Require 2 frames with damage ≤5% after ≥30% damage |
+
+**Final Parameters:**
+- `STOCK_LOSS_COOLDOWN = 10.0s` - Prevents duplicate detections for same player
+- `CONFIRM_FRAMES = 2` - Consecutive low-damage frames required before confirming
+
+**Bugs Fixed:**
+- Overlapping segment timestamps (end time now uses previous frame's timestamp)
+- Double-offset timestamp display in CLI output
+
+**Parameters Tuned:**
+- `neutral_reset_time`: 1.5s → 3.0s (reduces state flickering)
+- Added minimum segment duration filtering (1.0s neutral, 1.5s adv/disadv)
+
+**Files Modified:**
+- `runitback/classification/states.py` - Added StockLoss, updated FrameState/StateSegment
+- `runitback/classification/detector.py` - Stock loss detection logic
+- `runitback/cli.py` - Display stock losses on segments
+
+**Test Results:**
+- Before: 15+ false stock losses detected
+- After: 4 stock losses detected (realistic for a game)
+
+---
+
+### Earlier Development (Pre-December 30, 2024)
+
+The following systems were developed in earlier sessions. See detailed sections below.
+
+---
+
+## Project Overview
+
+RunItBack is a Python CLI tool that analyzes Super Smash Bros. Ultimate (SSBU) replays from YouTube videos. It identifies game states (neutral, advantage, disadvantage), tracks stock losses, and provides timestamped analysis.
+
+## Technical Stack
+
+- **Language:** Python 3.11+
+- **Interface:** CLI (Typer + Rich for formatting)
+- **Video:** yt-dlp for download, OpenCV for frame processing
+- **OCR:** PaddleOCR for damage percentage reading
+- **Detection:** Hybrid (CV extraction + rule-based classification)
+
+---
+
+## Core Detection Systems
+
+### 1. Game State Detection
+
+#### Current Implementation
+File: `runitback/classification/detector.py`
+
+**Method:** Damage percentage tracking via OCR
+- Sample frames at 0.5s intervals
+- Read damage percentages using PaddleOCR
+- Track damage changes between frames
+- Classify states based on who got hit
+
+**State Classification Rules:**
+- **NEUTRAL:** No significant damage changes, both players visible
+- **ADVANTAGE:** Opponent's damage increased (you hit them)
+- **DISADVANTAGE:** Your damage increased (they hit you)
+
+**Parameters:**
+- `hit_threshold = 4.0` - Minimum damage increase to count as a hit
+- `neutral_reset_time = 3.0` - Seconds without damage to return to neutral
+
+#### What Worked
+- Damage tracking is reliable for detecting who got hit
+- Using a neutral reset timer prevents rapid state flickering
+- The 4% hit threshold filters out self-damage and healing
+
+#### What Didn't Work
+- **Frame-by-frame state detection was too noisy** - OCR occasionally misreads, causing false state transitions
+- **Detecting grounded vs airborne characters** - Considered using image processing to detect when characters are standing on platforms as a neutral reset criteria, but:
+  - Character sprites vary wildly (89 characters, many costumes)
+  - Stage backgrounds interfere with detection
+  - Visual effects obscure characters
+  - Decided on simpler approach with timer-based reset
+
+#### Alternative Considered but Not Implemented
+- **Character position tracking** using motion detection and Kalman filter
+  - Would enable more accurate state detection (e.g., detect edgeguarding)
+  - Too complex for initial implementation
+  - Deferred to future phases
+
+### 2. Stock Loss Detection
+
+#### Current Implementation (Final)
+File: `runitback/classification/detector.py`, lines 208-273
+
+**Method:** Consecutive low-damage frame confirmation
+- When damage drops to ≤5%, start counting consecutive low frames
+- After 2 consecutive low frames (CONFIRM_FRAMES), check if previous damage was ≥30%
+- If so, confirm stock loss
+- Apply 10-second cooldown per player to prevent duplicates
+
+**Data Structures Added:**
+- `StockLoss` dataclass in `states.py` - records timestamp and player
+- `p1_stock_loss` / `p2_stock_loss` flags on `FrameState`
+- `stock_losses` list on `StateSegment`
+
+#### Evolution of Stock Loss Detection
+
+**Attempt 1: Simple Damage Reset**
+```python
+# Detect when damage drops significantly to near-zero
+if prev_damage >= 50 and current_damage <= 5:
+    stock_loss = True
+```
+**Problem:** OCR noise caused many false positives. OCR would occasionally misread damage as 0-5%, triggering false stock losses.
+
+**Attempt 2: Stock Splash Screen Detection**
+```python
+# Detect the "2-3" stock count display that appears when stock is lost
+def detect_stock_splash(frame):
+    # Look for bright white numbers in center
+    # Use OCR to read "X-Y" pattern
+```
+**Problem:**
+- The splash has transparency over gameplay, making detection unreliable
+- Calling OCR for every frame is too slow
+- Final stock loss shows "GAME!" instead of stock count
+
+**Attempt 3: HUD Stock Icon Counting**
+```python
+# Track stock icons displayed below damage percentage
+p1_stocks = count_stocks(frame, player=1)
+p2_stocks = count_stocks(frame, player=2)
+```
+**Problem:** Stock icon detection via brightness thresholds was unreliable:
+- Stage backgrounds affect brightness
+- Game effects interfere
+- Values flickered (e.g., 3→1→3→2→3)
+
+**Attempt 4 (Final): Consecutive Frame Confirmation**
+- Require 2 consecutive frames with damage ≤5%
+- Remember the high damage value before the low streak started
+- Only trigger if that high value was ≥30%
+- Use 10-second cooldown per player
+
+**Why This Works:**
+- Filters single-frame OCR errors
+- Legitimate stock losses show sustained low damage
+- Cooldown prevents duplicate detections from lingering low values
+
+### 3. Segment Building and Filtering
+
+File: `runitback/classification/detector.py`, `_build_segments()`
+
+**Method:**
+1. Group consecutive frames with same state into segments
+2. Filter out short segments (noise):
+   - Neutral segments < 1.0s removed
+   - Advantage/disadvantage segments < 1.5s removed
+3. Merge consecutive segments of same state
+4. Propagate stock losses through filtering/merging
+
+#### What Worked
+- Minimum duration filtering greatly reduces noise
+- Merging consecutive same-state segments produces clean output
+
+#### Edge Case Handled
+- When short segments are filtered, their stock losses are carried forward to the previous segment
+
+### 4. Damage Percentage OCR
+
+File: `runitback/cv/ocr.py`
+
+**Method:**
+- Use PaddleOCR with English model
+- Disable document orientation detection (game UI doesn't need rotation)
+- Apply character substitution for common misreads (O→0, S→5, etc.)
+- Validate damage is in range 0-999%
+
+**Current Configuration:**
+```python
+PaddleOCR(
+    lang="en",
+    use_doc_orientation_classify=False,
+    use_doc_unwarping=False,
+    use_textline_orientation=False,
+)
+```
+
+**ROI Coordinates (normalized):**
+- P1 Damage: (0.27, 0.87, 0.44, 0.98)
+- P2 Damage: (0.64, 0.87, 0.76, 0.98)
+
+#### Accuracy Improvement Options
+
+**Template Matching (Option 2):**
+- Create templates for each digit 0-9 and % symbol
+- Match against damage region
+- More robust to color variations
+- Estimated improvement: 10-20% accuracy gain
+- Implementation effort: Medium (need to capture templates, handle scaling)
+
+**ML-based Digit Recognition (Option 3):**
+- Train CNN on SSBU damage number screenshots
+- Would handle all visual variations
+- Estimated improvement: 30-50% accuracy gain
+- Implementation effort: High (need training data, model architecture, training pipeline)
+- Feasibility: Highly feasible with modern tools
+  - Could use transfer learning from MNIST/SVHN
+  - Would need ~1000+ labeled screenshots
+  - Training time: hours on GPU
+
+### 5. Game Boundary Detection
+
+File: `runitback/cli.py`, `detect_games()`
+
+**Method:** Hybrid GO!/GAME! marker detection + HUD-based detection
+
+**Primary (GO!/GAME! markers):**
+1. Detect "GO!" screens via orange/yellow color analysis in center
+2. Detect "GAME!" screens via green color + moderate brightness
+3. Validate GAME! markers by checking for white flash after
+4. Match GO! markers with subsequent GAME! markers
+
+**Fallback (HUD-based):**
+- Detect gameplay frames by HUD presence:
+  - Character icons (colorful portraits)
+  - Stock icons (bright indicators)
+  - Damage displays (white numbers)
+- Merge consecutive gameplay frames into games
+- Filter by minimum duration (30s)
+
+#### What Worked
+- Color-based GO!/GAME! detection is reliable
+- White flash validation eliminates false GAME! positives
+- Combining markers with HUD detection handles edge cases
+
+#### What Didn't Work
+- **Pure HUD detection** produced too many false positives (menus with similar layouts)
+- **Template matching for GO!/GAME!** was brittle across different video qualities
+
+### 6. Character Detection
+
+File: `runitback/cv/character_detector.py`
+
+**Method:**
+1. Try Gemini API (LLM-based detection) if API key available
+2. Fall back to template matching against character portrait database
+3. Use video title hints to guide detection
+
+**Cross-game consistency:**
+- Track character detections across all games in a set
+- If one character dominates (≥75% of games), apply to outliers
+- Only correct commonly confused pairs (Mario/Luigi, Ken/Terry, etc.)
+
+---
+
+## Project Structure
+
+```
+RunItBack/
+├── runitback/
+│   ├── cli.py                    # Typer CLI entry point
+│   ├── config.py                 # Pydantic settings
+│   ├── video/
+│   │   ├── downloader.py         # yt-dlp wrapper with caching
+│   │   └── frame_extractor.py    # OpenCV frame sampling
+│   ├── cv/
+│   │   ├── ocr.py                # PaddleOCR damage reading
+│   │   ├── ui_detector.py        # HUD detection, stock counting
+│   │   ├── stage_detector.py     # Stage identification
+│   │   ├── character_detector.py # Character identification
+│   │   └── llm_detector.py       # Gemini API integration
+│   ├── classification/
+│   │   ├── states.py             # GameState, FrameState, StateSegment
+│   │   └── detector.py           # Game state detection logic
+│   └── utils/
+│       └── logging.py            # Logging configuration
+├── data/
+│   ├── stages.json               # Stage geometry definitions
+│   └── game_markers/             # GO!/GAME! templates
+└── tests/
+```
+
+---
+
+## Key Data Structures
+
+### FrameState
+```python
+@dataclass
+class FrameState:
+    timestamp: float
+    frame_index: int
+    p1_damage: Optional[float]
+    p2_damage: Optional[float]
+    p1_stocks: Optional[int]
+    p2_stocks: Optional[int]
+    p1_visible: bool
+    p2_visible: bool
+    state: GameState
+    p1_stock_loss: bool
+    p2_stock_loss: bool
+```
+
+### StateSegment
+```python
+@dataclass
+class StateSegment:
+    state: GameState
+    start_time: float
+    end_time: float
+    start_frame: int
+    end_frame: int
+    stock_losses: list[StockLoss]
+```
+
+### StockLoss
+```python
+@dataclass
+class StockLoss:
+    timestamp: float
+    player: int  # 1 or 2
+```
+
+---
+
+## Configuration
+
+### Detection Parameters
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `hit_threshold` | 4.0 | Min damage increase to count as hit |
+| `neutral_reset_time` | 3.0s | Time without damage to return to neutral |
+| `STOCK_LOSS_COOLDOWN` | 10.0s | Min time between stock losses for same player |
+| `CONFIRM_FRAMES` | 2 | Consecutive low-damage frames to confirm stock loss |
+| `MIN_NEUTRAL_DURATION` | 1.0s | Minimum segment length for neutral |
+| `MIN_ADV_DISADV_DURATION` | 1.5s | Minimum segment length for advantage/disadvantage |
+
+### Sample Output
+```
+STATE SUMMARY:
+  Neutral:      0:42 (25%)
+  Advantage:    0:49 (28%)
+  Disadvantage: 1:20 (47%)
+
+NEUTRAL SEGMENTS:
+  0:18 - 0:25
+  0:40 - 0:44  ★ You lost a stock
+  0:54 - 0:58
+  ...
+
+ADVANTAGE SEGMENTS:
+  0:32 - 0:39
+  1:20 - 1:25
+  ...
+
+DISADVANTAGE SEGMENTS:
+  0:26 - 0:31
+  0:46 - 0:54
+  1:26 - 1:27  ★ Opponent lost a stock
+  ...
+```
+
+---
+
+## Future Improvements
+
+1. **Template Matching for OCR** - Create digit templates for more robust damage reading
+2. **ML-based Digit Recognition** - Train CNN for SSBU damage numbers
+3. **Character Position Tracking** - Motion detection + Kalman filter for edgeguard detection
+4. **Slippi Integration** - For Melee replays, read game memory directly
+5. **Stage-specific Ledge Detection** - Use stage geometry data for ledgetrap identification
+
+---
+
+## Testing
+
+The test video used during development:
+- URL: https://www.youtube.com/watch?v=7oPdiBsgSG0
+- Title: kit (Ken) vs Sophist (King Dedede) - West Towne Brawl 150 Winners R3
+
+Ground truth comparison (first 50 seconds):
+- Neutral: 0:18-0:26, 0:38-0:44, 0:55-0:59
+- Disadvantage: 0:26-0:32, 0:44-0:55, 0:59-1:08
+- Advantage: 0:34-0:38
+
+Detection results were within acceptable accuracy after parameter tuning.
