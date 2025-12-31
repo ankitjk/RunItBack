@@ -10,9 +10,16 @@ Key concepts:
 
 The detector uses a reset timer to return to neutral after a period
 of no damage exchanges while both players are visible (on stage).
+
+Stock loss detection methods:
+1. PRIMARY: Damage reset detection (instant, free) - detects when damage goes from
+   high (50%+) to 0% over consecutive frames
+2. OPTIONAL: Gemini Vision API confirmation - uses stock counter splash screen
+   detection for higher accuracy (especially for low-percent kills)
 """
 
 import logging
+import os
 from typing import Optional
 
 import cv2
@@ -39,11 +46,14 @@ class GameStateDetector:
     2. Detecting significant damage increases (hits)
     3. Tracking state transitions based on who got hit
     4. Using a reset timer to return to neutral
+    5. Optionally confirming stock losses with Gemini Vision API
 
     Attributes:
         hit_threshold: Minimum damage increase to count as a hit (filters self-damage)
         neutral_reset_time: Seconds without damage before returning to neutral
         player_perspective: Which player to analyze (1 or 2)
+        use_gemini_stock_detection: Whether to use Gemini for stock loss confirmation
+        gemini_api_key: API key for Gemini (uses env var if not provided)
     """
 
     def __init__(
@@ -51,6 +61,8 @@ class GameStateDetector:
         player_perspective: int = 1,
         hit_threshold: float = 4.0,
         neutral_reset_time: float = 1.5,
+        use_gemini_stock_detection: bool = False,
+        gemini_api_key: Optional[str] = None,
     ):
         """Initialize the detector.
 
@@ -58,10 +70,28 @@ class GameStateDetector:
             player_perspective: Which player to analyze (1 or 2)
             hit_threshold: Minimum damage increase to count as a hit
             neutral_reset_time: Seconds without damage to return to neutral
+            use_gemini_stock_detection: Enable Gemini Vision API for stock loss
+                confirmation. More accurate but adds ~0.5-1.5s per potential kill
+                and ~$0.0001 per API call. Recommended for accuracy.
+            gemini_api_key: Gemini API key. If not provided, uses GEMINI_API_KEY
+                environment variable.
         """
         self.player_perspective = player_perspective
         self.hit_threshold = hit_threshold
         self.neutral_reset_time = neutral_reset_time
+        self.use_gemini_stock_detection = use_gemini_stock_detection
+        self.gemini_api_key = gemini_api_key or os.environ.get("GEMINI_API_KEY")
+
+        # Import stock counter detector if Gemini is enabled
+        self._stock_counter_tracker = None
+        if self.use_gemini_stock_detection:
+            try:
+                from runitback.cv.stock_counter_detector import StockCounterTracker
+                self._stock_counter_tracker = StockCounterTracker(use_gemini=True)
+                logger.info("Gemini stock counter detection enabled")
+            except ImportError as e:
+                logger.warning(f"Could not import StockCounterTracker: {e}")
+                self.use_gemini_stock_detection = False
 
     def detect_states(
         self,
@@ -86,11 +116,15 @@ class GameStateDetector:
                 frame_states=[],
             )
 
+        # Reset stock counter tracker for new analysis
+        if self._stock_counter_tracker:
+            self._stock_counter_tracker.reset()
+
         # Extract damage values from each frame
         frame_states = self._extract_frame_states(frames)
 
-        # Detect state transitions
-        self._detect_state_transitions(frame_states)
+        # Detect state transitions (pass frames for Gemini detection)
+        self._detect_state_transitions(frame_states, frames)
 
         # Merge consecutive frames into segments
         segments = self._build_segments(frame_states)
@@ -176,13 +210,16 @@ class GameStateDetector:
 
         return frame_states
 
-    def _detect_state_transitions(self, frame_states: list[FrameState]) -> None:
+    def _detect_state_transitions(
+        self, frame_states: list[FrameState], frames: Optional[list] = None
+    ) -> None:
         """Detect state transitions based on damage changes.
 
         Modifies frame_states in place to set the state attribute.
 
         Args:
             frame_states: List of FrameState to analyze
+            frames: Optional list of Frame objects (for Gemini stock detection)
         """
         if not frame_states:
             return
@@ -211,7 +248,18 @@ class GameStateDetector:
         p2_low_damage_frames = 0
         p1_high_damage_before_low: Optional[float] = None  # Damage before low streak started
         p2_high_damage_before_low: Optional[float] = None
-        CONFIRM_FRAMES = 2  # Require 2 consecutive low frames (1 second at 0.5s interval)
+        CONFIRM_FRAMES = 3  # Require 3 consecutive low frames (1.5 seconds at 0.5s interval)
+        MIN_KILL_DAMAGE = 50  # Minimum damage before stock loss is plausible (filters OCR noise)
+
+        # Track maximum damage seen to handle OCR noise
+        # This prevents losing track of high damage when OCR has intermediate errors
+        p1_recent_max_damage: float = 0.0
+        p2_recent_max_damage: float = 0.0
+
+        # Build frame lookup for Gemini detection
+        frame_by_index = {}
+        if frames and self.use_gemini_stock_detection:
+            frame_by_index = {i: f for i, f in enumerate(frames)}
 
         for fs in frame_states:
             # Calculate damage deltas
@@ -236,41 +284,109 @@ class GameStateDetector:
                 fs.timestamp - last_p2_stock_loss_time >= STOCK_LOSS_COOLDOWN
             )
 
+            # Update recent max damage tracking
+            # Only update when damage is reasonably high (>10%) and below 200% (filter OCR errors)
+            if fs.p1_damage is not None and 10 < fs.p1_damage < 200:
+                p1_recent_max_damage = max(p1_recent_max_damage, fs.p1_damage)
+            if fs.p2_damage is not None and 10 < fs.p2_damage < 200:
+                p2_recent_max_damage = max(p2_recent_max_damage, fs.p2_damage)
+
             # Track P1 low damage frames and remember high damage before the streak
-            if fs.p1_damage is not None and fs.p1_damage <= 5:
-                if p1_low_damage_frames == 0 and prev_p1_damage is not None:
-                    p1_high_damage_before_low = prev_p1_damage
+            # Stock loss resets damage to exactly 0%, so only count frames at 0-2%
+            # (allowing small OCR variance like "1%" when it should be "0%")
+            if fs.p1_damage is not None and fs.p1_damage <= 2:
+                if p1_low_damage_frames == 0:
+                    # Use recent max damage instead of just prev_p1_damage
+                    # This handles cases where OCR had errors between high and low
+                    p1_high_damage_before_low = p1_recent_max_damage
                 p1_low_damage_frames += 1
             else:
                 p1_low_damage_frames = 0
                 p1_high_damage_before_low = None
+                # Don't decay max here - keep tracking max until stock loss is confirmed
+                # Max will be reset after stock loss detection
 
             # Track P2 low damage frames and remember high damage before the streak
-            if fs.p2_damage is not None and fs.p2_damage <= 5:
-                if p2_low_damage_frames == 0 and prev_p2_damage is not None:
-                    p2_high_damage_before_low = prev_p2_damage
+            # Stock loss resets damage to exactly 0%, so only count frames at 0-2%
+            if fs.p2_damage is not None and fs.p2_damage <= 2:
+                if p2_low_damage_frames == 0:
+                    # Use recent max damage instead of just prev_p2_damage
+                    p2_high_damage_before_low = p2_recent_max_damage
                 p2_low_damage_frames += 1
             else:
                 p2_low_damage_frames = 0
                 p2_high_damage_before_low = None
+                # Don't decay max here - keep tracking max until stock loss is confirmed
 
             # P1 stock loss: confirm only after consecutive low damage frames
-            # and only if damage was high (>= 30%) before the low streak
+            # and only if damage was high enough before the low streak
+            # MIN_KILL_DAMAGE filters OCR noise (e.g., 62% misread as 3%)
             if (p1_low_damage_frames == CONFIRM_FRAMES and
                 p1_high_damage_before_low is not None and
-                p1_high_damage_before_low >= 30 and cooldown_p1_ok):
+                p1_high_damage_before_low >= MIN_KILL_DAMAGE and cooldown_p1_ok):
                 p1_stock_loss = True
                 last_p1_stock_loss_time = fs.timestamp
-                logger.debug(f"P1 stock loss confirmed: {p1_high_damage_before_low:.0f}% -> low at {fs.timestamp:.1f}s")
+                # Reset recent max after stock loss (player starts fresh)
+                p1_recent_max_damage = 0.0
+                logger.debug(f"P1 stock loss confirmed (damage reset): {p1_high_damage_before_low:.0f}% -> low at {fs.timestamp:.1f}s")
 
             # P2 stock loss: confirm only after consecutive low damage frames
-            # and only if damage was high (>= 30%) before the low streak
+            # and only if damage was high enough before the low streak
             if (p2_low_damage_frames == CONFIRM_FRAMES and
                 p2_high_damage_before_low is not None and
-                p2_high_damage_before_low >= 30 and cooldown_p2_ok):
+                p2_high_damage_before_low >= MIN_KILL_DAMAGE and cooldown_p2_ok):
                 p2_stock_loss = True
                 last_p2_stock_loss_time = fs.timestamp
-                logger.debug(f"P2 stock loss confirmed: {p2_high_damage_before_low:.0f}% -> low at {fs.timestamp:.1f}s")
+                # Reset recent max after stock loss (player starts fresh)
+                p2_recent_max_damage = 0.0
+                logger.debug(f"P2 stock loss confirmed (damage reset): {p2_high_damage_before_low:.0f}% -> low at {fs.timestamp:.1f}s")
+
+            # GEMINI STOCK COUNTER DETECTION
+            # Use Gemini to detect stock counter splash for additional accuracy
+            # This catches low-percent kills that damage-reset would miss
+            if (self.use_gemini_stock_detection and
+                self._stock_counter_tracker is not None and
+                fs.frame_index in frame_by_index):
+
+                frame = frame_by_index[fs.frame_index]
+                (
+                    gemini_p1_lost,
+                    gemini_p2_lost,
+                    gemini_p1_stocks,
+                    gemini_p2_stocks,
+                    gemini_is_game_end,
+                ) = self._stock_counter_tracker.update(
+                    frame.image,
+                    fs.timestamp,
+                    api_key=self.gemini_api_key,
+                )
+
+                # Use Gemini detection if it found a stock loss
+                if gemini_p1_lost and cooldown_p1_ok:
+                    if not p1_stock_loss:
+                        logger.info(
+                            f"P1 stock loss detected by Gemini at {fs.timestamp:.1f}s "
+                            f"(stocks: {gemini_p1_stocks})"
+                        )
+                    p1_stock_loss = True
+                    last_p1_stock_loss_time = fs.timestamp
+                    p1_recent_max_damage = 0.0
+
+                if gemini_p2_lost and cooldown_p2_ok:
+                    if not p2_stock_loss:
+                        logger.info(
+                            f"P2 stock loss detected by Gemini at {fs.timestamp:.1f}s "
+                            f"(stocks: {gemini_p2_stocks})"
+                        )
+                    p2_stock_loss = True
+                    last_p2_stock_loss_time = fs.timestamp
+                    p2_recent_max_damage = 0.0
+
+                # Update stock counts from Gemini if available
+                if gemini_p1_stocks is not None:
+                    fs.p1_stocks = gemini_p1_stocks
+                if gemini_p2_stocks is not None:
+                    fs.p2_stocks = gemini_p2_stocks
 
             # Calculate damage deltas for hit detection
             if fs.p1_damage is not None and prev_p1_damage is not None:

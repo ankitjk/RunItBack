@@ -2,11 +2,60 @@
 
 This document chronicles the development process for RunItBack, including methods tried, what worked, what didn't, and the current state of the codebase.
 
-**Last Updated:** December 30, 2024
+**Last Updated:** December 31, 2024
 
 ---
 
 ## Changelog
+
+### December 31, 2024 - Gemini Stock Counter Detection
+
+**Session Goal:** Add visual stock counter detection using Gemini Vision API for improved accuracy
+
+**Problem:**
+- Damage-reset detection misses low-percent kills (kills below 50% damage)
+- Star KOs have no brightness flash, so brightness-based detection fails
+- OCR struggles with SSBU's stylized fonts (e.g., "1" misread as "E", "F", "T")
+
+**Solution:** Stock counter splash screen detection using Gemini Vision API
+
+**Methods Attempted:**
+
+| Attempt | Method | Result |
+|---------|--------|--------|
+| 1 | Brightness flash detection | ❌ Too many false positives from game effects, loading screens, transitions |
+| 2 | OCR-based stock counter reading | ❌ PaddleOCR couldn't reliably read stylized SSBU font ("1" → "E", "F", "T") |
+| 3 | **Gemini Vision API** | ✅ Perfect detection of stock counter splash and GAME! screen |
+
+**Files Added/Modified:**
+- `runitback/cv/llm_detector.py` - Added `detect_stock_counter_with_gemini()` and `GeminiStockCounterDetection` dataclass
+- `runitback/cv/stock_counter_detector.py` - New module wrapping Gemini detection with `StockCounterTracker` class
+- `runitback/classification/detector.py` - Integrated Gemini detection alongside damage-reset method
+- `tests/test_game_detection.py` - Added `ExpectedStockLoss` dataclass and `TestStockLossDetection` class
+
+**Implementation Details:**
+- Stock counter splash appears after every kill showing "X - Y" format (P1 stocks - P2 stocks)
+- Works for ALL kill types including star KO (no brightness flash) and normal KO
+- "GAME!" screen appears instead of stock counter for final stock
+- Gemini prompt asks for JSON response with `detected`, `p1_stocks`, `p2_stocks`, `is_game_end`, `confidence`
+- Results are cached to minimize duplicate API calls
+
+**Cost Analysis:**
+- ~$0.0001-0.0002 per API call (Gemini Flash with image input)
+- ~$0.0003-0.0006 per game (3-5 stock losses)
+- Latency: ~0.5-1.5s per API call
+
+**Integration Strategy:**
+- Damage-reset detection remains PRIMARY (free, instant)
+- Gemini detection is OPTIONAL confirmation (enable with `use_gemini_stock_detection=True`)
+- Both methods run together when enabled - Gemini catches low-percent kills that damage-reset misses
+
+**Test Results:**
+- Game 1 (3 stock losses): All detected correctly including 2:40 star KO
+- Game 2 (5 stock losses): All detected correctly
+- No false positives in non-kill frames
+
+---
 
 ### December 30, 2024 - Stock Loss Tracking Implementation
 
@@ -113,16 +162,30 @@ File: `runitback/classification/detector.py`
 
 ### 2. Stock Loss Detection
 
-#### Current Implementation (Final)
-File: `runitback/classification/detector.py`, lines 208-273
+#### Current Implementation (Hybrid)
+File: `runitback/classification/detector.py`
 
-**Method:** Consecutive low-damage frame confirmation
-- When damage drops to ≤5%, start counting consecutive low frames
-- After 2 consecutive low frames (CONFIRM_FRAMES), check if previous damage was ≥30%
+**Method:** Dual detection with damage-reset (primary) + Gemini Vision (optional)
+
+**Primary - Damage Reset Detection (free, instant):**
+- When damage drops to ≤2%, start counting consecutive low frames
+- After 3 consecutive low frames (CONFIRM_FRAMES), check if previous damage was ≥50%
 - If so, confirm stock loss
 - Apply 10-second cooldown per player to prevent duplicates
 
-**Data Structures Added:**
+**Optional - Gemini Stock Counter Detection (more accurate):**
+- Enable with `use_gemini_stock_detection=True` on `GameStateDetector`
+- Detects stock counter splash screen ("X - Y" format) using Gemini Vision API
+- Catches low-percent kills that damage-reset would miss
+- Also detects "GAME!" screen for final stock
+
+**Cost/Time Analysis (Gemini enabled):**
+- Per API call: ~$0.0001-0.0002, ~0.5-1.5s latency
+- Per game (3-5 kills): ~$0.0003-0.0006, ~1.5-7.5s total
+- Per set (3-5 games): ~$0.001-0.003, ~5-40s total
+- Results are cached to avoid duplicate calls
+
+**Data Structures:**
 - `StockLoss` dataclass in `states.py` - records timestamp and player
 - `p1_stock_loss` / `p2_stock_loss` flags on `FrameState`
 - `stock_losses` list on `StateSegment`
@@ -293,7 +356,8 @@ RunItBack/
 │   │   ├── ui_detector.py        # HUD detection, stock counting
 │   │   ├── stage_detector.py     # Stage identification
 │   │   ├── character_detector.py # Character identification
-│   │   └── llm_detector.py       # Gemini API integration
+│   │   ├── llm_detector.py       # Gemini API integration (chars, stock counter)
+│   │   └── stock_counter_detector.py  # Stock counter splash detection
 │   ├── classification/
 │   │   ├── states.py             # GameState, FrameState, StateSegment
 │   │   └── detector.py           # Game state detection logic
@@ -303,6 +367,7 @@ RunItBack/
 │   ├── stages.json               # Stage geometry definitions
 │   └── game_markers/             # GO!/GAME! templates
 └── tests/
+    └── test_game_detection.py    # Stock loss and game detection tests
 ```
 
 ---
@@ -356,9 +421,17 @@ class StockLoss:
 | `hit_threshold` | 4.0 | Min damage increase to count as hit |
 | `neutral_reset_time` | 3.0s | Time without damage to return to neutral |
 | `STOCK_LOSS_COOLDOWN` | 10.0s | Min time between stock losses for same player |
-| `CONFIRM_FRAMES` | 2 | Consecutive low-damage frames to confirm stock loss |
+| `CONFIRM_FRAMES` | 3 | Consecutive low-damage frames to confirm stock loss |
+| `MIN_KILL_DAMAGE` | 50 | Min damage before stock loss is plausible |
 | `MIN_NEUTRAL_DURATION` | 1.0s | Minimum segment length for neutral |
 | `MIN_ADV_DISADV_DURATION` | 1.5s | Minimum segment length for advantage/disadvantage |
+
+### Gemini Stock Counter Detection
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `use_gemini_stock_detection` | False | Enable Gemini Vision for stock loss confirmation |
+| `gemini_api_key` | env var | API key (uses `GEMINI_API_KEY` env var if not set) |
+| `detection_cooldown` | 3.0s | Min time between Gemini API calls |
 
 ### Sample Output
 ```

@@ -17,6 +17,15 @@ from typing import Optional
 
 
 @dataclass
+class ExpectedStockLoss:
+    """Expected stock loss event for test verification."""
+    timestamp: tuple[int, int]  # (minutes, seconds) in video time
+    player: int  # 1 or 2 - which player lost the stock
+    is_game_end: bool = False  # True if this is the final stock (GAME!)
+    timestamp_tolerance: int = 3  # Tolerance in seconds
+
+
+@dataclass
 class ExpectedGame:
     """Expected game data for test verification."""
     game_number: int
@@ -25,6 +34,7 @@ class ExpectedGame:
     end_time: tuple[int, int]  # (minutes, seconds)
     player1_character: Optional[str] = None  # Player 1 character name
     player2_character: Optional[str] = None  # Player 2 character name
+    stock_losses: Optional[list[ExpectedStockLoss]] = None  # Expected stock losses
     # Tolerance for timestamp matching (seconds)
     timestamp_tolerance: int = 30
 
@@ -52,6 +62,12 @@ TEST_VIDEOS = [
                 end_time=(3, 42),
                 player1_character="Ken",
                 player2_character="King Dedede",
+                # Ken (P1) loses all 3 stocks, Dedede (P2) loses none
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(1, 8), player=1),   # Ken loses stock 1
+                    ExpectedStockLoss(timestamp=(2, 40), player=1),  # Ken loses stock 2 (star KO)
+                    ExpectedStockLoss(timestamp=(3, 31), player=1, is_game_end=True),  # Ken loses stock 3 (GAME!)
+                ],
             ),
             ExpectedGame(
                 game_number=2,
@@ -60,6 +76,16 @@ TEST_VIDEOS = [
                 end_time=(8, 5),
                 player1_character="Ken",
                 player2_character="King Dedede",
+                # Game 2: Ken loses 3 stocks, Dedede loses 2 stocks
+                # Ken (P1) loses stocks at: 5:05, 6:43, 7:52 (GAME!)
+                # Dedede (P2) loses stocks at: 5:16, 6:34
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(5, 5), player=1),   # Ken loses stock 1
+                    ExpectedStockLoss(timestamp=(5, 16), player=2),  # Dedede loses stock 1
+                    ExpectedStockLoss(timestamp=(6, 34), player=2),  # Dedede loses stock 2
+                    ExpectedStockLoss(timestamp=(6, 43), player=1),  # Ken loses stock 2
+                    ExpectedStockLoss(timestamp=(7, 52), player=1, is_game_end=True),  # Ken loses stock 3 (GAME!)
+                ],
             ),
         ],
     ),
@@ -177,6 +203,60 @@ TEST_VIDEOS = [
                 end_time=(22, 25),
                 player1_character="Steve",
                 player2_character="Palutena",
+            ),
+        ],
+    ),
+    TestVideo(
+        url="https://www.youtube.com/watch?v=KfMZ9bQUbtk",
+        video_id="KfMZ9bQUbtk",
+        description="3 game set: Cloud vs Pit on Pokemon Stadium 2 x2, Small Battlefield",
+        expected_games=[
+            ExpectedGame(
+                game_number=1,
+                stage="pokemon_stadium_2",
+                start_time=(0, 16),
+                end_time=(3, 25),
+                player1_character="Cloud",
+                player2_character="Pit",
+                # Cloud (P1) loses 3 stocks, Pit (P2) loses 1 stock
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(0, 23), player=1),   # Cloud loses stock 1
+                    ExpectedStockLoss(timestamp=(1, 47), player=1),   # Cloud loses stock 2
+                    ExpectedStockLoss(timestamp=(2, 14), player=2),   # Pit loses stock 1
+                    ExpectedStockLoss(timestamp=(3, 25), player=1, is_game_end=True),  # Cloud loses stock 3 (GAME!)
+                ],
+            ),
+            ExpectedGame(
+                game_number=2,
+                stage="pokemon_stadium_2",
+                start_time=(4, 4),
+                end_time=(7, 31),
+                player1_character="Cloud",
+                player2_character="Pit",
+                # Cloud (P1) loses 2 stocks, Pit (P2) loses 3 stocks
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(4, 51), player=2),   # Pit loses stock 1
+                    ExpectedStockLoss(timestamp=(5, 53), player=2),   # Pit loses stock 2
+                    ExpectedStockLoss(timestamp=(6, 16), player=1),   # Cloud loses stock 1
+                    ExpectedStockLoss(timestamp=(7, 22), player=1),   # Cloud loses stock 2
+                    ExpectedStockLoss(timestamp=(7, 31), player=2, is_game_end=True),  # Pit loses stock 3 (GAME!)
+                ],
+            ),
+            ExpectedGame(
+                game_number=3,
+                stage="small_battlefield",
+                start_time=(8, 23),
+                end_time=(12, 40),
+                player1_character="Cloud",
+                player2_character="Pit",
+                # Cloud (P1) loses 2 stocks, Pit (P2) loses 3 stocks
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(9, 18), player=2),   # Pit loses stock 1
+                    ExpectedStockLoss(timestamp=(10, 19), player=1),  # Cloud loses stock 1
+                    ExpectedStockLoss(timestamp=(11, 47), player=2),  # Pit loses stock 2
+                    ExpectedStockLoss(timestamp=(11, 55), player=1),  # Cloud loses stock 2
+                    ExpectedStockLoss(timestamp=(12, 40), player=2, is_game_end=True),  # Pit loses stock 3 (GAME!)
+                ],
             ),
         ],
     ),
@@ -341,6 +421,105 @@ class TestStageDetection:
         # This would require actual test images - placeholder for now
         # TODO: Add test images for stage detection
         pass
+
+
+class TestStockLossDetection:
+    """Tests for stock loss detection using Gemini stock counter."""
+
+    # Filter to only videos with stock loss data
+    VIDEOS_WITH_STOCK_DATA = [v for v in TEST_VIDEOS if any(g.stock_losses for g in v.expected_games)]
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("test_video", VIDEOS_WITH_STOCK_DATA, ids=lambda v: v.video_id)
+    def test_stock_counter_detection(self, test_video: TestVideo):
+        """Test that stock counter splash screens are correctly detected."""
+        from runitback.video.downloader import download_video
+        from runitback.video.frame_extractor import extract_frames
+        from runitback.cv.llm_detector import detect_stock_counter_with_gemini
+        from runitback.config import settings
+
+        # Download video
+        video_path = download_video(test_video.url, cache_dir=settings.cache_dir)
+
+        # Extract frames at 0.5s interval
+        frames = list(extract_frames(video_path, interval_sec=0.5))
+
+        # Test each expected stock loss
+        for game in test_video.expected_games:
+            if not game.stock_losses:
+                continue
+
+            for expected_loss in game.stock_losses:
+                expected_time = timestamp_to_seconds(expected_loss.timestamp)
+
+                # Find frames around the expected kill time (+1 to +3 seconds after)
+                # Stock counter appears shortly after the kill
+                detected = False
+                detection_details = []
+
+                for offset in range(0, 6):  # Check 0-3 seconds after expected time
+                    target_time = expected_time + offset * 0.5
+
+                    # Find closest frame
+                    closest_frame = min(frames, key=lambda f: abs(f.timestamp - target_time))
+                    if abs(closest_frame.timestamp - target_time) > 1:
+                        continue
+
+                    result = detect_stock_counter_with_gemini(closest_frame.image, use_cache=True)
+
+                    if result.detected:
+                        detected = True
+                        if expected_loss.is_game_end:
+                            # Should detect GAME! screen
+                            if result.is_game_end:
+                                detection_details.append(f"GAME! at {seconds_to_timestamp(closest_frame.timestamp)}")
+                                break
+                        else:
+                            # Should detect stock counts
+                            if result.p1_stocks is not None and result.p2_stocks is not None:
+                                detection_details.append(
+                                    f"P1={result.p1_stocks}, P2={result.p2_stocks} at "
+                                    f"{seconds_to_timestamp(closest_frame.timestamp)}"
+                                )
+                                break
+
+                assert detected, (
+                    f"Stock loss at {seconds_to_timestamp(expected_time)} (P{expected_loss.player}) "
+                    f"not detected for {test_video.video_id} Game {game.game_number}"
+                )
+
+    @pytest.mark.slow
+    def test_stock_counter_no_false_positives(self):
+        """Test that normal gameplay frames don't trigger stock counter detection."""
+        from runitback.video.downloader import download_video
+        from runitback.video.frame_extractor import extract_frames
+        from runitback.cv.llm_detector import detect_stock_counter_with_gemini
+        from runitback.config import settings
+
+        # Use first test video
+        test_video = TEST_VIDEOS[0]
+        video_path = download_video(test_video.url, cache_dir=settings.cache_dir)
+        frames = list(extract_frames(video_path, interval_sec=0.5))
+
+        # Check frames that should NOT have stock counter (baseline gameplay)
+        # These are times between kills where normal gameplay is happening
+        baseline_times = [30, 45, 90, 120, 180]  # Times with no stock loss nearby
+
+        false_positives = 0
+        for baseline_time in baseline_times:
+            # Find closest frame
+            closest_frame = min(frames, key=lambda f: abs(f.timestamp - baseline_time))
+            if abs(closest_frame.timestamp - baseline_time) > 2:
+                continue
+
+            result = detect_stock_counter_with_gemini(closest_frame.image, use_cache=True)
+            if result.detected:
+                false_positives += 1
+
+        # Allow at most 1 false positive (could be near an actual kill)
+        assert false_positives <= 1, (
+            f"Too many false positives ({false_positives}) in baseline gameplay"
+        )
 
 
 # Convenience function to run slow tests

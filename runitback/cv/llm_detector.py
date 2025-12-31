@@ -718,6 +718,216 @@ Confidence: [high/medium/low]"""
         )
 
 
+@dataclass
+class GeminiStockCounterDetection:
+    """Result of Gemini stock counter detection."""
+    detected: bool  # Whether a stock counter splash was visible
+    p1_stocks: Optional[int]  # Player 1's stock count (0-3)
+    p2_stocks: Optional[int]  # Player 2's stock count (0-3)
+    is_game_end: bool  # True if "GAME!" screen was shown
+    confidence: str  # "high", "medium", "low"
+    raw_response: str
+
+
+# Cache directory for stock counter results
+STOCK_COUNTER_CACHE_DIR = Path(__file__).parent.parent.parent / ".cache" / "stock_counter_results"
+
+
+def get_cached_stock_counter_result(frame_hash: str) -> Optional[GeminiStockCounterDetection]:
+    """Check if we have a cached stock counter result for this frame."""
+    cache_file = STOCK_COUNTER_CACHE_DIR / f"{frame_hash}.txt"
+    if cache_file.exists():
+        try:
+            lines = cache_file.read_text().strip().split("\n")
+            if len(lines) >= 6:
+                return GeminiStockCounterDetection(
+                    detected=lines[0] == "True",
+                    p1_stocks=int(lines[1]) if lines[1] != "None" else None,
+                    p2_stocks=int(lines[2]) if lines[2] != "None" else None,
+                    is_game_end=lines[3] == "True",
+                    confidence=lines[4],
+                    raw_response="\n".join(lines[5:]),
+                )
+        except Exception as e:
+            logger.debug(f"Failed to read stock counter cache: {e}")
+    return None
+
+
+def save_cached_stock_counter_result(frame_hash: str, result: GeminiStockCounterDetection) -> None:
+    """Save a stock counter detection result to cache."""
+    STOCK_COUNTER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_file = STOCK_COUNTER_CACHE_DIR / f"{frame_hash}.txt"
+    try:
+        cache_file.write_text(
+            f"{result.detected}\n{result.p1_stocks}\n{result.p2_stocks}\n"
+            f"{result.is_game_end}\n{result.confidence}\n{result.raw_response}"
+        )
+    except Exception as e:
+        logger.debug(f"Failed to write stock counter cache: {e}")
+
+
+def detect_stock_counter_with_gemini(
+    frame: np.ndarray,
+    api_key: Optional[str] = None,
+    use_cache: bool = True,
+) -> GeminiStockCounterDetection:
+    """Detect stock counter splash screen using Gemini Vision.
+
+    The stock counter shows "X - Y" in the center of the screen after a kill,
+    where X is P1's remaining stocks and Y is P2's remaining stocks.
+    For the final kill, "GAME!" appears instead.
+
+    Args:
+        frame: BGR gameplay frame
+        api_key: Gemini API key (defaults to GEMINI_API_KEY env var)
+        use_cache: Whether to use cached results
+
+    Returns:
+        GeminiStockCounterDetection with stock counts
+    """
+    # Check cache first
+    frame_hash = get_frame_hash(frame)
+    if use_cache:
+        cached = get_cached_stock_counter_result(frame_hash)
+        if cached:
+            logger.debug(f"Using cached stock counter result for frame {frame_hash}")
+            return cached
+
+    # Get API key
+    api_key = api_key or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        logger.warning("No Gemini API key provided for stock counter detection.")
+        return GeminiStockCounterDetection(
+            detected=False,
+            p1_stocks=None,
+            p2_stocks=None,
+            is_game_end=False,
+            confidence="low",
+            raw_response="No API key",
+        )
+
+    try:
+        import google.generativeai as genai
+    except ImportError:
+        logger.error("google-generativeai package not installed.")
+        return GeminiStockCounterDetection(
+            detected=False,
+            p1_stocks=None,
+            p2_stocks=None,
+            is_game_end=False,
+            confidence="low",
+            raw_response="Package not installed",
+        )
+
+    # Configure Gemini
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-2.5-flash")
+
+    # Prepare prompt for stock counter detection
+    prompt = """This is a screenshot from Super Smash Bros. Ultimate.
+
+Is there a STOCK COUNTER splash screen visible? This appears after a player loses a stock (life).
+
+The stock counter shows:
+- Large numbers in the CENTER of the screen in format "X - Y"
+- X = Player 1's remaining stocks (left side player)
+- Y = Player 2's remaining stocks (right side player)
+- Both numbers are typically 0, 1, 2, or 3
+
+OR it may show:
+- "GAME!" text if the match just ended (one player lost their last stock)
+
+If NO stock counter is visible (just normal gameplay), respond:
+Visible: No
+
+If a stock counter IS visible, respond:
+Visible: Yes
+P1 Stocks: [0-3]
+P2 Stocks: [0-3]
+Confidence: [high/medium/low]
+
+If "GAME!" is shown, respond:
+Visible: Yes
+Game End: Yes
+Confidence: [high/medium/low]"""
+
+    # Convert frame to image data
+    image_data = frame_to_base64(frame)
+
+    try:
+        image_part = {
+            "mime_type": "image/jpeg",
+            "data": image_data,
+        }
+
+        response = model.generate_content([prompt, image_part])
+        raw_text = response.text
+
+        # Parse response
+        detected = False
+        p1_stocks = None
+        p2_stocks = None
+        is_game_end = False
+        confidence = "low"
+
+        for line in raw_text.split("\n"):
+            line_lower = line.lower().strip()
+            if "visible:" in line_lower:
+                detected = "yes" in line_lower
+            elif "p1 stocks:" in line_lower:
+                try:
+                    val = line.split(":", 1)[1].strip()
+                    p1_stocks = int(val)
+                except (ValueError, IndexError):
+                    pass
+            elif "p2 stocks:" in line_lower:
+                try:
+                    val = line.split(":", 1)[1].strip()
+                    p2_stocks = int(val)
+                except (ValueError, IndexError):
+                    pass
+            elif "game end:" in line_lower:
+                is_game_end = "yes" in line_lower
+            elif "confidence:" in line_lower:
+                conf = line.split(":", 1)[1].strip().lower()
+                if conf in ["high", "medium", "low"]:
+                    confidence = conf
+
+        result = GeminiStockCounterDetection(
+            detected=detected,
+            p1_stocks=p1_stocks,
+            p2_stocks=p2_stocks,
+            is_game_end=is_game_end,
+            confidence=confidence,
+            raw_response=raw_text,
+        )
+
+        # Cache the result
+        if use_cache:
+            save_cached_stock_counter_result(frame_hash, result)
+
+        if detected:
+            if is_game_end:
+                logger.info(f"Gemini detected GAME! screen ({confidence} confidence)")
+            else:
+                logger.info(f"Gemini detected stock counter: P1={p1_stocks}, P2={p2_stocks} ({confidence} confidence)")
+        else:
+            logger.debug("Gemini: No stock counter visible")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Gemini stock counter detection error: {e}")
+        return GeminiStockCounterDetection(
+            detected=False,
+            p1_stocks=None,
+            p2_stocks=None,
+            is_game_end=False,
+            confidence="low",
+            raw_response=f"Error: {e}",
+        )
+
+
 def detect_stage_from_frames_gemini(
     frames: list[np.ndarray],
     sample_positions: tuple[float, ...] = (0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.60),

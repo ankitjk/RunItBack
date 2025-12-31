@@ -1,0 +1,9 @@
+True
+3
+2
+False
+high
+Visible: Yes
+P1 Stocks: 3
+P2 Stocks: 2
+Confidence: high
