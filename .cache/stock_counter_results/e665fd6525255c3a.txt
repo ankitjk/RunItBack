@@ -1,0 +1,8 @@
+True
+None
+None
+True
+high
+Visible: Yes
+Game End: Yes
+Confidence: high

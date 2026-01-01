@@ -828,6 +828,11 @@ def analyze(
             console.print("[yellow]No frames found for this game.[/yellow]")
             continue
 
+        # Collect game start and end times for all detected games
+        # This helps filter out false positives at game transitions
+        game_start_times = [g.start_timestamp for g in detected_games]
+        game_end_times = [g.end_timestamp for g in detected_games]
+
         # Run state detection
         with Progress(
             SpinnerColumn(),
@@ -835,7 +840,12 @@ def analyze(
             console=console,
         ) as progress:
             progress.add_task(f"Analyzing game {game.game_number} states...", total=None)
-            analysis = state_detector.detect_states(game_frames, frame_interval=sample_rate)
+            analysis = state_detector.detect_states(
+                game_frames,
+                frame_interval=sample_rate,
+                game_end_times=game_end_times,
+                game_start_times=game_start_times,
+            )
 
         # Display state analysis
         if analysis.frame_states:

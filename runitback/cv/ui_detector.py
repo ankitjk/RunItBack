@@ -74,9 +74,10 @@ class UIState:
 P1_DAMAGE_ROI = (0.27, 0.87, 0.44, 0.98)  # Player 1 (left-center)
 P2_DAMAGE_ROI = (0.64, 0.87, 0.76, 0.98)  # Player 2 (right-center)
 
-# Stock indicator regions (just above damage)
-P1_STOCKS_ROI = (0.14, 0.82, 0.26, 0.88)
-P2_STOCKS_ROI = (0.74, 0.82, 0.86, 0.88)
+# Stock indicator regions (below player names, at very bottom of screen)
+# Stock icons appear as small character head icons below the damage percentage
+P1_STOCKS_ROI = (0.26, 0.95, 0.36, 0.99)  # Player 1 stocks (bottom-left)
+P2_STOCKS_ROI = (0.64, 0.95, 0.74, 0.99)  # Player 2 stocks (bottom-right)
 
 # Character icon regions (small portrait near stocks)
 # These appear as colorful, relatively detailed icons
