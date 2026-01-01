@@ -110,6 +110,7 @@ class GameStateDetector:
         frames: list,
         frame_interval: float = 0.5,
         game_end_times: Optional[list[float]] = None,
+        game_start_times: Optional[list[float]] = None,
     ) -> GameStateAnalysis:
         """Detect game states from a list of frames.
 
@@ -119,6 +120,9 @@ class GameStateDetector:
             game_end_times: Optional list of known game end timestamps (from CLI game detection).
                 If provided, smart Gemini will check these times for GAME! screens
                 to detect final stock losses.
+            game_start_times: Optional list of known game start timestamps.
+                If provided, stock loss detection will be skipped for a few seconds
+                after each game starts (to avoid false positives from GO! screen).
 
         Returns:
             GameStateAnalysis with detected segments
@@ -132,8 +136,9 @@ class GameStateDetector:
                 frame_states=[],
             )
 
-        # Store game end times for use in smart Gemini postprocessing
+        # Store game times for use in smart Gemini postprocessing
         self._game_end_times = game_end_times or []
+        self._game_start_times = game_start_times or []
 
         # Reset stock counter tracker for new analysis
         if self._stock_counter_tracker:
@@ -386,7 +391,8 @@ class GameStateDetector:
                           p2_high_damage_before_low >= MIN_KILL_DAMAGE)
 
             # Skip stock loss detection entirely during game transitions
-            if in_game_transition:
+            # Also skip near game starts (avoid GO! screen false positives)
+            if in_game_transition or self._is_near_game_start(fs.timestamp):
                 fs.state = current_state
                 continue
 
@@ -566,6 +572,25 @@ class GameStateDetector:
                 frame_states, frames, uncertain_low_percent_kills
             )
 
+    def _is_near_game_start(self, timestamp: float, cooldown: float = 5.0) -> bool:
+        """Check if timestamp is within cooldown period after a game start.
+
+        Args:
+            timestamp: The timestamp to check
+            cooldown: Seconds after game start to skip (default 5 seconds)
+
+        Returns:
+            True if timestamp is too close to a game start
+        """
+        if not hasattr(self, '_game_start_times') or not self._game_start_times:
+            return False
+
+        for start_time in self._game_start_times:
+            # Skip frames within cooldown seconds after game start
+            if 0 <= timestamp - start_time < cooldown:
+                return True
+        return False
+
     def _smart_gemini_postprocess(
         self,
         frame_states: list[FrameState],
@@ -595,6 +620,12 @@ class GameStateDetector:
         # The stock counter splash appears BEFORE the damage reset (during kill animation)
         # So we need to check frames BEFORE the detection point
         for frame_idx, player, damage in uncertain_low_percent_kills:
+            # Skip if near a game start (avoid GO! screen false positives)
+            fs = fs_by_index.get(frame_idx)
+            if fs and self._is_near_game_start(fs.timestamp):
+                logger.debug(f"Skipping uncertain kill at {fs.timestamp:.1f}s (near game start)")
+                continue
+
             # Check frames from 3 seconds before to the detection point
             # Stock counter splash typically appears 1-2 seconds after the kill
             found_kill = False
@@ -611,19 +642,24 @@ class GameStateDetector:
 
                 if detected or is_game_end:
                     # Find the best frame to mark the stock loss (use check_idx)
-                    fs = fs_by_index.get(check_idx)
-                    if fs:
+                    check_fs = fs_by_index.get(check_idx)
+                    if check_fs:
+                        # Skip if near a game start (avoid GO! screen false positives)
+                        if self._is_near_game_start(check_fs.timestamp):
+                            logger.debug(f"Skipping Gemini detection at {check_fs.timestamp:.1f}s (near game start)")
+                            continue
+
                         if player == 1:
-                            fs.p1_stock_loss = True
+                            check_fs.p1_stock_loss = True
                             logger.info(
                                 f"Smart Gemini confirmed P1 low-percent kill "
-                                f"({damage:.0f}%) at {fs.timestamp:.1f}s"
+                                f"({damage:.0f}%) at {check_fs.timestamp:.1f}s"
                             )
                         else:
-                            fs.p2_stock_loss = True
+                            check_fs.p2_stock_loss = True
                             logger.info(
                                 f"Smart Gemini confirmed P2 low-percent kill "
-                                f"({damage:.0f}%) at {fs.timestamp:.1f}s"
+                                f"({damage:.0f}%) at {check_fs.timestamp:.1f}s"
                             )
                         found_kill = True
                         break  # Found it, no need to check more frames
@@ -638,11 +674,20 @@ class GameStateDetector:
         game_end_candidates = self._find_game_end_candidates(frame_states)
 
         for end_frame_idx in game_end_candidates:
-            # Check several frames after the last detected stock loss
-            # GAME! screen appears after the final kill animation
-            for offset in range(0, 10):  # Check up to 5 seconds after (at 0.5s intervals)
+            # Check frames BEFORE the game end
+            # GAME! screen appears 30-60 seconds before the "end timestamp" because
+            # the end timestamp includes results screen, character select, etc.
+            # The GAME! screen is only visible for ~1-2 seconds, so we need fine granularity
+            # Search from -40s to -5s before end, checking every 1s (2 frames)
+
+            for offset in range(-80, 0, 2):  # -40s to 0s, every 1s
                 check_idx = end_frame_idx + offset
                 if check_idx not in frame_by_index:
+                    continue
+
+                # Skip if near a game start (avoid GO! screen false positives)
+                check_fs = fs_by_index.get(check_idx)
+                if check_fs and self._is_near_game_start(check_fs.timestamp):
                     continue
 
                 frame = frame_by_index[check_idx]
@@ -655,7 +700,6 @@ class GameStateDetector:
                     fs = fs_by_index.get(check_idx)
                     if fs:
                         # Determine who lost based on stock counts or previous state
-                        # The player with 0 stocks lost their final stock
                         if p1_stocks == 0:
                             fs.p1_stock_loss = True
                             logger.info(f"Smart Gemini detected GAME! P1 lost final stock at {fs.timestamp:.1f}s")
@@ -663,10 +707,8 @@ class GameStateDetector:
                             fs.p2_stock_loss = True
                             logger.info(f"Smart Gemini detected GAME! P2 lost final stock at {fs.timestamp:.1f}s")
                         else:
-                            # Can't determine who lost, use context from previous frames
-                            # Look at who was at lower stocks before this frame
                             self._infer_game_end_loser(frame_states, check_idx)
-                    break  # Found GAME!, no need to check more frames
+                    break  # Found GAME!, move to next game end candidate
 
         if gemini_calls > 0:
             logger.info(f"Smart Gemini made {gemini_calls} API calls for uncertain situations")

@@ -101,6 +101,14 @@ TEST_VIDEOS = [
                 end_time=(3, 59),
                 player1_character="Ken",
                 player2_character="Sonic",
+                # Ken (P1) loses 3 stocks, Sonic (P2) loses 2 stocks
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(1, 20), player=2),   # Sonic loses stock 1
+                    ExpectedStockLoss(timestamp=(1, 42), player=1),   # Ken loses stock 1
+                    ExpectedStockLoss(timestamp=(2, 52), player=1),   # Ken loses stock 2
+                    ExpectedStockLoss(timestamp=(3, 49), player=2),   # Sonic loses stock 2
+                    ExpectedStockLoss(timestamp=(3, 58), player=1, is_game_end=True),  # Ken loses stock 3 (GAME!)
+                ],
             ),
             ExpectedGame(
                 game_number=2,
@@ -109,6 +117,13 @@ TEST_VIDEOS = [
                 end_time=(9, 12),
                 player1_character="Ken",
                 player2_character="Sonic",
+                # Ken (P1) loses 1 stock, Sonic (P2) loses 3 stocks
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(5, 34), player=2),   # Sonic loses stock 1
+                    ExpectedStockLoss(timestamp=(6, 51), player=1),   # Ken loses stock 1
+                    ExpectedStockLoss(timestamp=(7, 38), player=2),   # Sonic loses stock 2
+                    ExpectedStockLoss(timestamp=(9, 12), player=2, is_game_end=True),  # Sonic loses stock 3 (GAME!)
+                ],
             ),
             ExpectedGame(
                 game_number=3,
@@ -117,6 +132,13 @@ TEST_VIDEOS = [
                 end_time=(12, 49),
                 player1_character="Ken",
                 player2_character="Sonic",
+                # Ken (P1) loses 1 stock, Sonic (P2) loses 3 stocks
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(10, 49), player=2),  # Sonic loses stock 1
+                    ExpectedStockLoss(timestamp=(11, 56), player=2),  # Sonic loses stock 2
+                    ExpectedStockLoss(timestamp=(12, 28), player=1),  # Ken loses stock 1
+                    ExpectedStockLoss(timestamp=(12, 48), player=2, is_game_end=True),  # Sonic loses stock 3 (GAME!)
+                ],
             ),
         ],
     ),
@@ -132,6 +154,13 @@ TEST_VIDEOS = [
                 end_time=(2, 40),
                 player1_character="Dark Pit",
                 player2_character="Ken",
+                # Dark Pit (P1) loses 3 stocks, Ken (P2) loses 1 stock
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(0, 33), player=1),   # Dark Pit loses stock 1
+                    ExpectedStockLoss(timestamp=(1, 29), player=1),   # Dark Pit loses stock 2
+                    ExpectedStockLoss(timestamp=(1, 46), player=2),   # Ken loses stock 1
+                    ExpectedStockLoss(timestamp=(2, 40), player=1, is_game_end=True),  # Dark Pit loses stock 3 (GAME!)
+                ],
             ),
             ExpectedGame(
                 game_number=2,
@@ -140,6 +169,14 @@ TEST_VIDEOS = [
                 end_time=(6, 39),
                 player1_character="Dark Pit",
                 player2_character="Ken",
+                # Dark Pit (P1) loses 2 stocks, Ken (P2) loses 3 stocks
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(3, 51), player=1),   # Dark Pit loses stock 1
+                    ExpectedStockLoss(timestamp=(4, 49), player=1),   # Dark Pit loses stock 2
+                    ExpectedStockLoss(timestamp=(4, 54), player=2),   # Ken loses stock 1
+                    ExpectedStockLoss(timestamp=(5, 34), player=2),   # Ken loses stock 2
+                    ExpectedStockLoss(timestamp=(6, 39), player=2, is_game_end=True),  # Ken loses stock 3 (GAME!)
+                ],
             ),
             ExpectedGame(
                 game_number=3,
@@ -148,6 +185,14 @@ TEST_VIDEOS = [
                 end_time=(10, 15),
                 player1_character="Dark Pit",
                 player2_character="Ken",
+                # Dark Pit (P1) loses 3 stocks, Ken (P2) loses 2 stocks
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(7, 53), player=1),   # Dark Pit loses stock 1
+                    ExpectedStockLoss(timestamp=(8, 41), player=2),   # Ken loses stock 1
+                    ExpectedStockLoss(timestamp=(8, 47), player=1),   # Dark Pit loses stock 2
+                    ExpectedStockLoss(timestamp=(9, 56), player=2),   # Ken loses stock 2
+                    ExpectedStockLoss(timestamp=(10, 15), player=1, is_game_end=True),  # Dark Pit loses stock 3 (GAME!)
+                ],
             ),
             ExpectedGame(
                 game_number=4,
@@ -156,6 +201,13 @@ TEST_VIDEOS = [
                 end_time=(13, 25),
                 player1_character="Dark Pit",
                 player2_character="Ken",
+                # Dark Pit (P1) loses 3 stocks, Ken (P2) loses 1 stock
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(11, 38), player=1),  # Dark Pit loses stock 1
+                    ExpectedStockLoss(timestamp=(12, 33), player=2),  # Ken loses stock 1
+                    ExpectedStockLoss(timestamp=(12, 48), player=1),  # Dark Pit loses stock 2
+                    ExpectedStockLoss(timestamp=(13, 25), player=1, is_game_end=True),  # Dark Pit loses stock 3 (GAME!)
+                ],
             ),
         ],
     ),
@@ -171,6 +223,13 @@ TEST_VIDEOS = [
                 end_time=(2, 38),
                 player1_character="Steve",
                 player2_character="Palutena",
+                # Steve (P1) loses 1 stock, Palutena (P2) loses 3 stocks
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(1, 29), player=2),   # Palutena loses stock 1
+                    ExpectedStockLoss(timestamp=(1, 39), player=1),   # Steve loses stock 1
+                    ExpectedStockLoss(timestamp=(2, 9), player=2),    # Palutena loses stock 2
+                    ExpectedStockLoss(timestamp=(2, 38), player=2, is_game_end=True),  # Palutena loses stock 3 (GAME!)
+                ],
             ),
             ExpectedGame(
                 game_number=2,
@@ -179,6 +238,14 @@ TEST_VIDEOS = [
                 end_time=(7, 10),
                 player1_character="Steve",
                 player2_character="Palutena",
+                # Steve (P1) loses 3 stocks, Palutena (P2) loses 2 stocks
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(4, 34), player=1),   # Steve loses stock 1
+                    ExpectedStockLoss(timestamp=(4, 45), player=2),   # Palutena loses stock 1
+                    ExpectedStockLoss(timestamp=(5, 35), player=2),   # Palutena loses stock 2
+                    ExpectedStockLoss(timestamp=(5, 49), player=1),   # Steve loses stock 2
+                    ExpectedStockLoss(timestamp=(7, 10), player=1, is_game_end=True),  # Steve loses stock 3 (GAME!)
+                ],
             ),
             ExpectedGame(
                 game_number=3,
@@ -187,14 +254,30 @@ TEST_VIDEOS = [
                 end_time=(11, 45),
                 player1_character="Steve",
                 player2_character="Palutena",
+                # Steve (P1) loses 3 stocks, Palutena (P2) loses 2 stocks
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(9, 10), player=1),   # Steve loses stock 1
+                    ExpectedStockLoss(timestamp=(9, 20), player=2),   # Palutena loses stock 1
+                    ExpectedStockLoss(timestamp=(10, 53), player=1),  # Steve loses stock 2
+                    ExpectedStockLoss(timestamp=(11, 24), player=2),  # Palutena loses stock 2
+                    ExpectedStockLoss(timestamp=(11, 45), player=1, is_game_end=True),  # Steve loses stock 3 (GAME!)
+                ],
             ),
             ExpectedGame(
                 game_number=4,
                 stage="town_and_city",
                 start_time=(12, 38),
-                end_time=(16, 45),
+                end_time=(16, 54),
                 player1_character="Steve",
                 player2_character="Palutena",
+                # Steve (P1) loses 2 stocks, Palutena (P2) loses 3 stocks
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(14, 9), player=1),   # Steve loses stock 1
+                    ExpectedStockLoss(timestamp=(14, 17), player=2),  # Palutena loses stock 1
+                    ExpectedStockLoss(timestamp=(15, 58), player=1),  # Steve loses stock 2
+                    ExpectedStockLoss(timestamp=(16, 18), player=2),  # Palutena loses stock 2
+                    ExpectedStockLoss(timestamp=(16, 54), player=2, is_game_end=True),  # Palutena loses stock 3 (GAME!)
+                ],
             ),
             ExpectedGame(
                 game_number=5,
@@ -203,6 +286,13 @@ TEST_VIDEOS = [
                 end_time=(22, 25),
                 player1_character="Steve",
                 player2_character="Palutena",
+                # Steve (P1) loses 3 stocks, Palutena (P2) loses 1 stock
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(19, 31), player=2),  # Palutena loses stock 1
+                    ExpectedStockLoss(timestamp=(19, 55), player=1),  # Steve loses stock 1
+                    ExpectedStockLoss(timestamp=(21, 12), player=1),  # Steve loses stock 2
+                    ExpectedStockLoss(timestamp=(22, 25), player=1, is_game_end=True),  # Steve loses stock 3 (GAME!)
+                ],
             ),
         ],
     ),
@@ -256,6 +346,59 @@ TEST_VIDEOS = [
                     ExpectedStockLoss(timestamp=(11, 47), player=2),  # Pit loses stock 2
                     ExpectedStockLoss(timestamp=(11, 55), player=1),  # Cloud loses stock 2
                     ExpectedStockLoss(timestamp=(12, 40), player=2, is_game_end=True),  # Pit loses stock 3 (GAME!)
+                ],
+            ),
+        ],
+    ),
+    TestVideo(
+        url="https://www.youtube.com/watch?v=UgGQkF1wkoA",
+        video_id="UgGQkF1wkoA",
+        description="3 game set: Mario vs Ness on Pokemon Stadium 2 x2, Small Battlefield",
+        expected_games=[
+            ExpectedGame(
+                game_number=1,
+                stage="pokemon_stadium_2",
+                start_time=(0, 31),
+                end_time=(3, 46),
+                player1_character="Mario",
+                player2_character="Ness",
+                # Mario (P1) loses 2 stocks, Ness (P2) loses 3 stocks
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(0, 59), player=1),   # Mario loses stock 1
+                    ExpectedStockLoss(timestamp=(1, 31), player=2),   # Ness loses stock 1
+                    ExpectedStockLoss(timestamp=(2, 11), player=1),   # Mario loses stock 2
+                    ExpectedStockLoss(timestamp=(2, 56), player=2),   # Ness loses stock 2
+                    ExpectedStockLoss(timestamp=(3, 46), player=2, is_game_end=True),  # Ness loses stock 3 (GAME!)
+                ],
+            ),
+            ExpectedGame(
+                game_number=2,
+                stage="pokemon_stadium_2",
+                start_time=(4, 40),
+                end_time=(7, 17),
+                player1_character="Mario",
+                player2_character="Ness",
+                # Mario (P1) loses 1 stock, Ness (P2) loses 3 stocks
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(5, 33), player=2),   # Ness loses stock 1
+                    ExpectedStockLoss(timestamp=(6, 21), player=1),   # Mario loses stock 1
+                    ExpectedStockLoss(timestamp=(6, 28), player=2),   # Ness loses stock 2
+                    ExpectedStockLoss(timestamp=(7, 17), player=2, is_game_end=True),  # Ness loses stock 3 (GAME!)
+                ],
+            ),
+            ExpectedGame(
+                game_number=3,
+                stage="small_battlefield",
+                start_time=(7, 57),
+                end_time=(10, 47),
+                player1_character="Mario",
+                player2_character="Ness",
+                # Mario (P1) loses 1 stock, Ness (P2) loses 3 stocks
+                stock_losses=[
+                    ExpectedStockLoss(timestamp=(8, 39), player=2),   # Ness loses stock 1
+                    ExpectedStockLoss(timestamp=(8, 56), player=1),   # Mario loses stock 1
+                    ExpectedStockLoss(timestamp=(9, 25), player=2),   # Ness loses stock 2
+                    ExpectedStockLoss(timestamp=(10, 47), player=2, is_game_end=True),  # Ness loses stock 3 (GAME!)
                 ],
             ),
         ],
