@@ -8,15 +8,20 @@ This file contains important information for AI assistants and developers workin
 
 RunItBack is a Python CLI tool that analyzes Super Smash Bros. Ultimate (SSBU) replays from YouTube URLs. It identifies games within sets, detects stages and characters, and classifies game states (neutral/advantage/disadvantage) with stock loss tracking.
 
-## Current Status (December 2024)
+## Current Status (January 2026)
 
 ### Working Features
 - ✅ Video download from YouTube (yt-dlp)
 - ✅ Frame extraction at configurable intervals
-- ✅ Game boundary detection (GO!/GAME! markers + HUD detection)
+- ✅ Game boundary detection (GO!/GAME! markers + white flash validation)
 - ✅ Character detection (Gemini API + template matching fallback)
 - ✅ **Game state detection** (neutral/advantage/disadvantage) via damage tracking
-- ✅ **Stock loss tracking** with segment annotations
+- ✅ **Stock loss tracking** - hybrid damage-reset + Smart Gemini detection
+- ✅ **Multi-game set support** - automatic game boundary detection with GO!→GAME! pairing
+
+### Known Issues (from test suite)
+- ❌ Stage detection returns "unknown" for all stages (needs implementation)
+- ⚠️ Mario/Luigi character confusion in some videos (pre-existing Gemini limitation)
 
 ### Detection Approach
 - **Damage Tracking**: PaddleOCR reads damage percentages every 0.5s
@@ -30,7 +35,8 @@ RunItBack is a Python CLI tool that analyzes Super Smash Bros. Ultimate (SSBU) r
 | `hit_threshold` | 4.0 | Min damage increase to count as hit |
 | `neutral_reset_time` | 3.0s | Time without damage to return to neutral |
 | `STOCK_LOSS_COOLDOWN` | 10.0s | Min time between stock losses per player |
-| `CONFIRM_FRAMES` | 2 | Consecutive low-damage frames to confirm stock loss |
+| `CONFIRM_FRAMES` | 3 | Consecutive low-damage frames to confirm stock loss |
+| `MIN_KILL_DAMAGE` | 50 | Minimum damage before stock loss is plausible |
 
 ## Tournament-Legal Stages (Hazards Off)
 
@@ -104,7 +110,16 @@ Character detection uses Google's Gemini Vision API (gemini-2.5-flash) for accur
 
 - **API Key**: Set `GEMINI_API_KEY` environment variable
 - **Disable Gemini**: Set `RUNITBACK_USE_GEMINI=0` to force template matching
-- **Cache Location**: `.cache/llm_results/` (relative to project root)
+- **Cache Location**: `.cache/` directory (relative to project root)
+  - `llm_results/` - Character detection cache
+  - `stage_results/` - Stage detection cache
+  - `stock_counter_results/` - Stock counter detection cache
+
+### Cache Directories
+
+Cache directories are excluded from git (see `.gitignore`):
+- `.cache/` - Gemini API results (~6 MB, speeds up re-analysis)
+- `.video_cache/` - Downloaded YouTube videos (can be large)
 
 ### Key Files
 

@@ -2,11 +2,42 @@
 
 This document chronicles the development process for RunItBack, including methods tried, what worked, what didn't, and the current state of the codebase.
 
-**Last Updated:** December 31, 2024
+**Last Updated:** January 2, 2026
 
 ---
 
 ## Changelog
+
+### January 2, 2026 - Timestamp Accuracy Fixes & Cache Management
+
+**Session Goal:** Fix timestamp accuracy test failures and manage cache directories
+
+**Problems Fixed:**
+1. GO!/GAME! pairing algorithm was backwards - found "closest GO! before each GAME!" instead of pairing each GO! with its next GAME!
+2. GAME! validation happened AFTER GO! filtering, causing incorrect pairing
+3. No minimum gap after GAME! to filter replay GO! screens
+4. White flash threshold too strict for some streams with overlays
+
+**Fixes Applied to `cli.py`:**
+
+1. **Moved GAME! validation before GO! filtering** - ensures only valid GAME! markers are used for pairing
+2. **New GO!→GAME! pairing algorithm** - pairs each GO! with the next GAME!, taking only the first GO! after each game ends
+3. **Added MIN_GAP_AFTER_GAME = 40 frames** (20 seconds) - filters replay GO! screens that appear too soon after GAME!
+4. **Relaxed white flash threshold** - brightness > 180 (was 200), white_ratio > 0.5 (was 0.8)
+
+**Cache Management:**
+- Added `.cache/` and `.video_cache/` to `.gitignore`
+- Removed previously committed cache files from git tracking (1279 files)
+- Cache remains locally for faster re-analysis
+
+**Test Results After Fixes:**
+- Game count tests: 6/6 passing
+- Timestamp accuracy: 6/6 passing
+- Character detection: 5/6 passing (Mario/Luigi confusion pre-existing)
+- Stock loss detection: 7/7 passing
+- Stage detection: 0/6 passing (not implemented yet)
+
+---
 
 ### December 31, 2024 - Gemini Stock Counter Detection
 
@@ -346,7 +377,7 @@ File: `runitback/cv/character_detector.py`
 ```
 RunItBack/
 ├── runitback/
-│   ├── cli.py                    # Typer CLI entry point
+│   ├── cli.py                    # Typer CLI entry point, game boundary detection
 │   ├── config.py                 # Pydantic settings
 │   ├── video/
 │   │   ├── downloader.py         # yt-dlp wrapper with caching
@@ -366,6 +397,11 @@ RunItBack/
 ├── data/
 │   ├── stages.json               # Stage geometry definitions
 │   └── game_markers/             # GO!/GAME! templates
+├── .cache/                       # Gemini API cache (gitignored)
+│   ├── llm_results/              # Character detection cache
+│   ├── stage_results/            # Stage detection cache
+│   └── stock_counter_results/    # Stock counter detection cache
+├── .video_cache/                 # Downloaded videos (gitignored)
 └── tests/
     └── test_game_detection.py    # Stock loss and game detection tests
 ```
