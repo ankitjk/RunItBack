@@ -1,6 +1,0 @@
-Luigi
-Wario
-high
-Player 1 (left side): Luigi
-Player 2 (right side): Wario
-Confidence: high

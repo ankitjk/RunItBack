@@ -59,3 +59,7 @@ Thumbs.db
 *.avi
 *.mov
 debug_frames/
+
+# Cache directories (Gemini API results, video downloads)
+.cache/
+.video_cache/

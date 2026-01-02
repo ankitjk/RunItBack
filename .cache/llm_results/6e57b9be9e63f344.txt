@@ -1,6 +1,0 @@
-Pit
-Terry
-high
-Player 1 (left side): Pit
-Player 2 (right side): Terry
-Confidence: high

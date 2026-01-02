@@ -1,6 +1,0 @@
-Luigi
-Ness
-high
-Player 1 (left side): Luigi
-Player 2 (right side): Ness
-Confidence: high

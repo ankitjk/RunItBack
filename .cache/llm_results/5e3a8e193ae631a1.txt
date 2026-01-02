@@ -1,6 +1,0 @@
-Steve
-Yoshi
-high
-Player 1 (left side): Steve
-Player 2 (right side): Yoshi
-Confidence: high

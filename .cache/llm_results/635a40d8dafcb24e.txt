@@ -1,6 +1,0 @@
-Unknown
-Steve
-high
-Player 1 (left side): Minecraft Zombie
-Player 2 (right side): Steve
-Confidence: high

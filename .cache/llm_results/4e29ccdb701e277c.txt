@@ -1,6 +1,0 @@
-Min Min
-Ken
-high
-Player 1 (left side): Min Min
-Player 2 (right side): Ken
-Confidence: high

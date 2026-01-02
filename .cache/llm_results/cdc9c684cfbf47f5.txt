@@ -1,6 +1,0 @@
-Cloud
-Pit
-high
-Player 1 (left side): Cloud
-Player 2 (right side): Pit
-Confidence: high

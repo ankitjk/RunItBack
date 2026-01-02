@@ -1,6 +1,0 @@
-Ken
-Ken
-high
-Player 1 (left side): Ken
-Player 2 (right side): Ken
-Confidence: high

@@ -1,4 +1,0 @@
-Hollow Bastion
-high
-Stage: Hollow Bastion
-Confidence: high

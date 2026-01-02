@@ -1,6 +1,0 @@
-Ken
-King Dedede
-high
-Player 1 (left side): Ken
-Player 2 (right side): King Dedede
-Confidence: high

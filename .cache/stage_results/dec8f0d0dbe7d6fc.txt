@@ -1,4 +1,0 @@
-Small Battlefield
-low
-Stage: Small Battlefield
-Confidence: low

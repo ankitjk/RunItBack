@@ -1,6 +1,0 @@
-Cloud
-Sora
-high
-Player 1 (left side): Cloud
-Player 2 (right side): Sora
-Confidence: high

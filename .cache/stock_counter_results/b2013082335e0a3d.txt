@@ -1,6 +1,0 @@
-False
-None
-None
-False
-low
-Visible: No

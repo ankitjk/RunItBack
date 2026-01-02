@@ -1,6 +1,0 @@
-Terry
-Joker
-high
-Player 1 (left side): Terry
-Player 2 (right side): Joker
-Confidence: high
