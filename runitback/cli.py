@@ -217,43 +217,10 @@ def detect_games(
     go_markers_raw = consolidate_markers(go_indices)
     game_markers_raw = consolidate_markers(game_indices)
 
-    # Further filter GO! markers using GAME! markers as anchors.
-    # A valid GO! should have a GAME! marker somewhere after it (even if another GO! appears first).
-    #
-    # The key insight: If there are N game ends (GAME! markers), there should be N game starts (GO!).
-    # We pair each GAME! with the most recent preceding GO!.
-    #
-    # Strategy:
-    # 1. For each GAME! marker, find the closest GO! before it
-    # 2. Those GO! markers are valid
-    # 3. Also keep the last GO! if it's after the last GAME! (final game in progress)
-    valid_go_set = set()
-
-    for game_marker in game_markers_raw:
-        # Find the closest GO! marker before this GAME!
-        closest_go = None
-        for go_marker in go_markers_raw:
-            if go_marker < game_marker - 20:  # GO! must be at least 10s before GAME!
-                closest_go = go_marker
-            else:
-                break  # go_markers_raw is sorted, so we can stop
-        if closest_go is not None:
-            valid_go_set.add(closest_go)
-
-    # Also include the last GO! if it's after the last GAME! (ongoing final game)
-    if go_markers_raw:
-        last_go = go_markers_raw[-1]
-        if not game_markers_raw or last_go > game_markers_raw[-1]:
-            valid_go_set.add(last_go)
-
-    # Convert to sorted list
-    go_markers = sorted(valid_go_set)
-
-    logger.debug(f"Filtered GO! markers from {go_markers_raw} to {go_markers}")
-
     # Validate GAME! markers by checking for white flash that follows
     # Real GAME! screens are followed by a bright white flash within 3-8 seconds
     # This eliminates false positives from green stage elements or menus
+    # NOTE: Must happen BEFORE GO! filtering since GO! pairing depends on valid GAME! markers
     import cv2
     import numpy as np
 
@@ -265,12 +232,74 @@ def detect_games(
                 gray = cv2.cvtColor(frames[check_idx].image, cv2.COLOR_BGR2GRAY)
                 mean_brightness = np.mean(gray)
                 white_ratio = np.sum(gray > 200) / gray.size
-                # White flash has very high brightness and white ratio
-                if mean_brightness > 200 and white_ratio > 0.8:
+                # White flash has high brightness and significant white ratio
+                # Relaxed thresholds to handle stream overlays that partially cover the flash
+                if mean_brightness > 180 and white_ratio > 0.5:
                     return True
         return False
 
-    game_markers = [m for m in game_markers_raw if has_white_flash_after(m)]
+    game_markers_validated = [m for m in game_markers_raw if has_white_flash_after(m)]
+    logger.debug(f"Validated GAME! markers: {game_markers_raw} -> {game_markers_validated}")
+
+    # Pair GO! markers with GAME! markers to form valid games.
+    # A valid GO! starts a game that ends with the next GAME! marker.
+    # If multiple GO! markers occur before a GAME!, only the FIRST one after the
+    # previous GAME! is valid (the others are likely false positives or replays).
+    #
+    # Strategy:
+    # 1. Start from the beginning (or after the last GAME!)
+    # 2. Find the first GO! marker
+    # 3. Find the next GAME! marker after it
+    # 4. That GO! is valid, skip to after the GAME! and repeat
+    valid_go_set = set()
+
+    # Sort both marker lists (use validated GAME! markers)
+    go_sorted = sorted(go_markers_raw)
+    game_sorted = sorted(game_markers_validated)
+
+    # Start searching from the beginning
+    search_start = 0
+    game_idx = 0
+
+    # Minimum frames between GAME! end and next GO! start
+    # Real games have character select, stage select, loading (~30-40 seconds)
+    # Replays or instant transitions are typically < 20 seconds
+    MIN_GAP_AFTER_GAME = 40  # 20 seconds at 0.5s/frame
+
+    while game_idx < len(game_sorted):
+        game_marker = game_sorted[game_idx]
+
+        # Find the first GO! marker after search_start but before this GAME!
+        # Also require minimum gap after previous GAME! to filter out replay GO! screens
+        first_go = None
+        for go_marker in go_sorted:
+            if go_marker >= search_start and go_marker < game_marker - 20:
+                first_go = go_marker
+                break  # Take the first one only
+
+        if first_go is not None:
+            valid_go_set.add(first_go)
+            logger.debug(f"Paired GO! at {first_go} with GAME! at {game_marker}")
+
+        # Move search_start to after this GAME! plus minimum gap
+        # This filters out GO! screens that appear during replays right after a game ends
+        search_start = game_marker + MIN_GAP_AFTER_GAME
+        game_idx += 1
+
+    # Also check for GO! markers after the last GAME! (ongoing final game)
+    for go_marker in go_sorted:
+        if go_marker >= search_start:
+            valid_go_set.add(go_marker)
+            logger.debug(f"Found GO! at {go_marker} after last GAME! (final game)")
+            break  # Take only the first one
+
+    # Convert to sorted list
+    go_markers = sorted(valid_go_set)
+
+    logger.debug(f"Filtered GO! markers from {go_markers_raw} to {go_markers}")
+
+    # Use the already-validated GAME! markers
+    game_markers = game_markers_validated
 
     logger.info(f"Detected {len(go_markers)} GO! markers: {go_markers}")
     logger.info(f"Detected {len(game_markers)} GAME! markers (validated with white flash): {game_markers}")
