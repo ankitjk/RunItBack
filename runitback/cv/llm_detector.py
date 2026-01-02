@@ -460,8 +460,83 @@ def detect_characters_from_frames_gemini(
                     logger.debug(f"Hint confirms winner: {winner}")
         return winner
 
+    def apply_exclusive_hint(
+        winner: str,
+        votes: dict[str, int],
+        exclusive_hint: str | None,
+    ) -> str:
+        """Apply exclusive hint when one hint is confirmed for the other player.
+
+        When one player's detection matches a hint, the remaining hint becomes
+        exclusive to the other player. This handles cases like Mario in a green
+        skin being detected as Luigi - if P2 matches "Ness", then "Mario" from
+        the title exclusively applies to P1.
+
+        Args:
+            winner: Current winner from voting
+            votes: Vote counts per character
+            exclusive_hint: The exclusive hint for this player (or None)
+
+        Returns:
+            The final character (may override winner if exclusive hint applies)
+        """
+        if not exclusive_hint or not votes:
+            return winner
+
+        # If winner already matches the exclusive hint, confirm it
+        if winner == exclusive_hint:
+            logger.debug(f"Exclusive hint confirms winner: {winner}")
+            return winner
+
+        # Check if winner is part of a confusion pair with the exclusive hint
+        for pair in CONFUSION_PAIRS:
+            if winner in pair and exclusive_hint in pair:
+                # Winner is in a confusion pair with the exclusive hint
+                # The exclusive hint overrides detection (e.g., Luigi -> Mario)
+                if exclusive_hint in votes:
+                    other_pct = votes.get(exclusive_hint, 0) / sum(votes.values())
+                    logger.info(
+                        f"Applying exclusive hint: {winner} -> {exclusive_hint} "
+                        f"(other player confirmed different character, {other_pct:.0%} votes)"
+                    )
+                    return exclusive_hint
+                else:
+                    # Exclusive hint not in votes at all, but still override
+                    # because the hint came from the title and should be trusted
+                    logger.info(
+                        f"Applying exclusive hint: {winner} -> {exclusive_hint} "
+                        f"(other player confirmed different character, no votes but title trusted)"
+                    )
+                    return exclusive_hint
+
+        return winner
+
+    # First pass: apply standard hints
     player1 = apply_hint(player1, p1_votes, p1_hints)
     player2 = apply_hint(player2, p2_votes, p2_hints)
+
+    # Second pass: apply exclusive hints when one player's detection confirms a hint
+    # This handles cases like Mario (green skin) detected as Luigi
+    if p1_hints and p2_hints:
+        # Get all hints (they should be the same since extract_characters_from_title
+        # returns the same list for both players)
+        all_hints = set(p1_hints) | set(p2_hints)
+
+        # Check if P2's detection matches a hint
+        if player2 in all_hints and len(all_hints) >= 2:
+            # P2 matched a hint - remaining hints are exclusive to P1
+            remaining_hints = all_hints - {player2}
+            for exclusive in remaining_hints:
+                # Apply the exclusive hint to P1
+                player1 = apply_exclusive_hint(player1, p1_votes, exclusive)
+
+        # Check if P1's detection matches a hint
+        if player1 in all_hints and len(all_hints) >= 2:
+            # P1 matched a hint - remaining hints are exclusive to P2
+            remaining_hints = all_hints - {player1}
+            for exclusive in remaining_hints:
+                # Apply the exclusive hint to P2
+                player2 = apply_exclusive_hint(player2, p2_votes, exclusive)
 
     # Log final decision with vote breakdown
     if p1_votes:
