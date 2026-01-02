@@ -154,6 +154,18 @@ Future enhancements:
 | `data/character_references/` | Character reference images for template matching fallback |
 | `docs/DEVELOPMENT.md` | **Development chronicle** - methods tried, what worked/didn't |
 
+## Available Skills
+
+Custom Claude Code skills for common development tasks:
+
+| Skill | Description |
+|-------|-------------|
+| `/test` | Run the pytest test suite with options for quick/full/pattern matching |
+| `/analyze <url>` | Analyze a YouTube SSBU replay video |
+| `/debug-video <url>` | Debug detection on a video with verbose logging and frame extraction |
+
+Skills are defined in `.claude/skills/`.
+
 ## Known Limitations
 
 1. **OCR Accuracy**: Damage reading can have errors during visual effects or motion blur
