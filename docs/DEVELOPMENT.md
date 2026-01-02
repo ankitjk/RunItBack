@@ -8,6 +8,44 @@ This document chronicles the development process for RunItBack, including method
 
 ## Changelog
 
+### January 2, 2026 - Character Detection Fix & Skills
+
+**Session Goal:** Fix Mario/Luigi character detection confusion and add Claude Code skills
+
+**Problem:**
+- `UgGQkF1wkoA` Game 2: Mario (in green skin) detected as Luigi
+- Gemini Vision API detected Luigi with 80% of votes (12/15)
+- Existing hint system only applied corrections when votes < 75%
+- Luigi won the vote because Mario's green skin makes him visually indistinguishable from Luigi
+
+**Solution: Exclusive Hint Override**
+
+Added a two-pass hint system in `llm_detector.py`:
+
+1. **First pass (existing):** Apply standard hints when vote confidence < 75%
+2. **Second pass (new):** When one player's detection matches a title hint, the remaining hint becomes exclusive to the other player
+
+Example for "doug todd (Mario) vs Spencer (Ness)":
+- P2 detection = Ness, which matches hint → Ness is confirmed for P2
+- Remaining hint "Mario" becomes exclusive to P1
+- P1 detected as Luigi (80%), but exclusive hint override applies: Luigi → Mario
+
+**Key Code Changes (`runitback/cv/llm_detector.py`):**
+- Added `apply_exclusive_hint()` function
+- When P2 matches a hint, remaining hints exclusively apply to P1 (and vice versa)
+- Works for any confusion pair (Mario/Luigi, Pit/Dark Pit, etc.) where color skins confuse detection
+
+**Skills Added:**
+- `/test` - Run pytest test suite
+- `/analyze <url>` - Analyze a YouTube SSBU replay
+- `/debug-video <url>` - Debug detection with verbose logging
+
+**Test Results After Fix:**
+- Character detection: 6/6 passing (was 5/6)
+- All other tests unchanged
+
+---
+
 ### January 2, 2026 - Timestamp Accuracy Fixes & Cache Management
 
 **Session Goal:** Fix timestamp accuracy test failures and manage cache directories
