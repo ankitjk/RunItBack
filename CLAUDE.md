@@ -21,7 +21,6 @@ RunItBack is a Python CLI tool that analyzes Super Smash Bros. Ultimate (SSBU) r
 
 ### Known Issues (from test suite)
 - ❌ Stage detection returns "unknown" for all stages (needs implementation)
-- ⚠️ Mario/Luigi character confusion in some videos (pre-existing Gemini limitation)
 
 ### Detection Approach
 - **Damage Tracking**: PaddleOCR reads damage percentages every 0.5s
