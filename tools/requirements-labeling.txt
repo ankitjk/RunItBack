@@ -1,0 +1,6 @@
+# Requirements for scene labeling tool
+# Install with: pip install -r tools/requirements-labeling.txt
+
+PyQt5>=5.15.0
+opencv-python>=4.8.0
+numpy>=1.24.0
