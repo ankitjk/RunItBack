@@ -153,6 +153,10 @@ class GameStateDetector:
         # Merge consecutive frames into segments
         segments = self._build_segments(frame_states)
 
+        # Filter segments to only include those within game boundaries
+        if self._game_start_times and self._game_end_times:
+            segments = self._filter_segments_by_game_bounds(segments)
+
         return GameStateAnalysis(
             player_perspective=self.player_perspective,
             neutral_segments=[s for s in segments if s.state == GameState.NEUTRAL],
@@ -968,6 +972,90 @@ class GameStateDetector:
                 merged_segments.append(seg)
 
         return merged_segments
+
+    def _filter_segments_by_game_bounds(
+        self, segments: list[StateSegment]
+    ) -> list[StateSegment]:
+        """Filter and clip segments to only exist within game boundaries.
+
+        Segments outside of any game (before first GO! or after GAME!) are removed.
+        Segments that span game boundaries are clipped to fit within the game.
+
+        Args:
+            segments: List of StateSegment to filter
+
+        Returns:
+            Filtered list of StateSegment
+        """
+        if not self._game_start_times or not self._game_end_times:
+            return segments
+
+        # Build list of (start, end) game intervals
+        # Pair up start and end times
+        game_intervals = list(zip(self._game_start_times, self._game_end_times))
+        if not game_intervals:
+            return segments
+
+        logger.debug(f"Filtering segments by {len(game_intervals)} game bounds")
+        for i, (start, end) in enumerate(game_intervals):
+            logger.debug(f"  Game {i+1}: {start:.1f}s - {end:.1f}s")
+
+        filtered_segments: list[StateSegment] = []
+
+        for seg in segments:
+            # Check if this segment overlaps with any game interval
+            for game_start, game_end in game_intervals:
+                # No overlap - segment is entirely before or after this game
+                if seg.end_time < game_start or seg.start_time > game_end:
+                    continue
+
+                # Segment overlaps with this game - clip to game bounds
+                clipped_start = max(seg.start_time, game_start)
+                clipped_end = min(seg.end_time, game_end)
+
+                # Skip if the clipped segment is too short
+                if clipped_end - clipped_start < 0.5:
+                    continue
+
+                # Filter stock losses to only those within the clipped bounds
+                clipped_stock_losses = [
+                    sl for sl in seg.stock_losses
+                    if clipped_start <= sl.timestamp <= clipped_end
+                ]
+
+                clipped_seg = StateSegment(
+                    state=seg.state,
+                    start_time=clipped_start,
+                    end_time=clipped_end,
+                    start_frame=seg.start_frame,  # Approximate, not recalculated
+                    end_frame=seg.end_frame,
+                    stock_losses=clipped_stock_losses,
+                )
+                filtered_segments.append(clipped_seg)
+
+        # Sort by start time and merge consecutive same-state segments
+        filtered_segments.sort(key=lambda s: s.start_time)
+
+        # Merge consecutive segments of the same state (may have been split by game bounds)
+        merged: list[StateSegment] = []
+        for seg in filtered_segments:
+            if merged and merged[-1].state == seg.state:
+                # Check if segments are adjacent (within 1 second)
+                if seg.start_time - merged[-1].end_time < 1.0:
+                    prev = merged[-1]
+                    merged[-1] = StateSegment(
+                        state=prev.state,
+                        start_time=prev.start_time,
+                        end_time=seg.end_time,
+                        start_frame=prev.start_frame,
+                        end_frame=seg.end_frame,
+                        stock_losses=prev.stock_losses + seg.stock_losses,
+                    )
+                    continue
+            merged.append(seg)
+
+        logger.debug(f"Filtered {len(segments)} segments to {len(merged)} within game bounds")
+        return merged
 
     def _collect_stock_losses(self, frame_states: list[FrameState]) -> list[StockLoss]:
         """Collect stock losses from a list of frame states.
