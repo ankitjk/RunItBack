@@ -2,24 +2,42 @@
 """Scene Labeler - Video labeling tool for SSBU scene classification.
 
 A PyQt5-based tool for labeling video segments with scene states and stage information.
+Supports both local video files and YouTube URLs.
 
 Usage:
-    python tools/scene_labeler.py <video_path> [--labels <labels.json>]
+    python tools/scene_labeler.py <video_path_or_youtube_url> [--labels <labels.json>]
+
+Examples:
+    python tools/scene_labeler.py path/to/video.mp4
+    python tools/scene_labeler.py "https://www.youtube.com/watch?v=VIDEO_ID"
+    python tools/scene_labeler.py "https://youtu.be/VIDEO_ID"
 
 Keyboard Shortcuts:
-    1-9     : Assign scene class to current segment
+    0-9     : Start labeling with class (continuous mode - auto-extends until changed)
     Space   : Pause/Play
     Left    : Previous frame (or 1 second if playing)
     Right   : Next frame (or 1 second if playing)
-    S       : Mark segment start
-    E       : Mark segment end and save
+    S       : Reset segment start (finalizes current label if any)
+    E       : Finalize current label at current position
     T       : Set stage for current game
-    G       : Mark new game boundary
+    G       : Mark new game boundary (at GO! for start, GAME! for end)
     Ctrl+S  : Save labels to file
     Ctrl+Z  : Undo last label
     Q       : Quit
 
+Labeling Workflow (Continuous Mode):
+    1. Press 0-9 to start labeling with a class
+    2. Navigate through the video (the label extends as you go)
+    3. When the scene changes, press a different number key
+    4. The previous label is automatically closed and a new one starts
+    5. Press E to finalize the last label when done
+
+Game Boundary Convention:
+    - Mark game START at: First frame after GO! disappears
+    - Mark game END at: Frame when GAME! appears
+
 Scene Classes:
+    0: non_gameplay     - Menus, loading screens, character select, results
     1: both_grounded    - Both players standing/attacking on stage
     2: one_airborne     - One in air, one on stage
     3: both_airborne    - Both in the air
@@ -32,7 +50,10 @@ Scene Classes:
 """
 
 import argparse
+import hashlib
 import json
+import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from enum import Enum
@@ -41,7 +62,7 @@ from typing import Optional
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QKeySequence, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -54,6 +75,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QShortcut,
     QSlider,
@@ -65,8 +87,110 @@ from PyQt5.QtWidgets import (
 )
 
 
+# =============================================================================
+# YouTube Download Support
+# =============================================================================
+
+def is_youtube_url(url: str) -> bool:
+    """Check if the given string is a YouTube URL."""
+    youtube_patterns = [
+        r'(?:https?://)?(?:www\.)?youtube\.com/watch\?v=[\w-]+',
+        r'(?:https?://)?(?:www\.)?youtu\.be/[\w-]+',
+        r'(?:https?://)?(?:www\.)?youtube\.com/embed/[\w-]+',
+    ]
+    return any(re.match(pattern, url) for pattern in youtube_patterns)
+
+
+def extract_video_id(url: str) -> Optional[str]:
+    """Extract video ID from YouTube URL."""
+    patterns = [
+        r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([\w-]+)',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+
+def get_cache_path(url: str) -> Path:
+    """Get the cache path for a YouTube video."""
+    video_id = extract_video_id(url)
+    if video_id:
+        # Use video ID as filename
+        cache_dir = Path(".video_cache")
+        cache_dir.mkdir(exist_ok=True)
+        return cache_dir / f"{video_id}.mp4"
+    # Fallback to hash of URL
+    url_hash = hashlib.md5(url.encode()).hexdigest()[:16]
+    cache_dir = Path(".video_cache")
+    cache_dir.mkdir(exist_ok=True)
+    return cache_dir / f"{url_hash}.mp4"
+
+
+class DownloadThread(QThread):
+    """Thread for downloading YouTube videos."""
+
+    progress = pyqtSignal(str)  # Status message
+    finished_download = pyqtSignal(str)  # Path to downloaded file
+    error = pyqtSignal(str)  # Error message
+
+    def __init__(self, url: str, output_path: Path, parent=None):
+        super().__init__(parent)
+        self.url = url
+        self.output_path = output_path
+
+    def run(self):
+        try:
+            self.progress.emit("Starting download...")
+
+            # Use yt-dlp to download
+            cmd = [
+                "yt-dlp",
+                "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
+                "-o", str(self.output_path),
+                "--merge-output-format", "mp4",
+                "--no-playlist",
+                self.url,
+            ]
+
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+
+            for line in process.stdout:
+                line = line.strip()
+                if line:
+                    # Parse progress from yt-dlp output
+                    if "[download]" in line and "%" in line:
+                        self.progress.emit(line)
+                    elif "Merging" in line or "Downloading" in line:
+                        self.progress.emit(line)
+
+            process.wait()
+
+            if process.returncode != 0:
+                self.error.emit(f"Download failed with code {process.returncode}")
+                return
+
+            if not self.output_path.exists():
+                self.error.emit("Download completed but file not found")
+                return
+
+            self.finished_download.emit(str(self.output_path))
+
+        except FileNotFoundError:
+            self.error.emit("yt-dlp not found. Install with: pip install yt-dlp")
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class SceneState(Enum):
     """Scene classification states."""
+    NON_GAMEPLAY = "non_gameplay"  # Menus, loading, character select, results
     BOTH_GROUNDED = "both_grounded"
     ONE_AIRBORNE = "one_airborne"
     BOTH_AIRBORNE = "both_airborne"
@@ -79,6 +203,7 @@ class SceneState(Enum):
 
 
 SCENE_LABELS = {
+    0: SceneState.NON_GAMEPLAY,
     1: SceneState.BOTH_GROUNDED,
     2: SceneState.ONE_AIRBORNE,
     3: SceneState.BOTH_AIRBORNE,
@@ -91,6 +216,7 @@ SCENE_LABELS = {
 }
 
 SCENE_COLORS = {
+    SceneState.NON_GAMEPLAY: "#9E9E9E",       # Grey - not gameplay
     SceneState.BOTH_GROUNDED: "#4CAF50",      # Green
     SceneState.ONE_AIRBORNE: "#2196F3",       # Blue
     SceneState.BOTH_AIRBORNE: "#00BCD4",      # Cyan
@@ -477,7 +603,7 @@ class LabelPanel(QWidget):
         self.segment_start_label = QLabel("Segment Start: --")
         segment_layout.addWidget(self.segment_start_label)
 
-        self.segment_class_label = QLabel("Class: (press 1-9 to label)")
+        self.segment_class_label = QLabel("Class: (press 0-9 to label)")
         segment_layout.addWidget(self.segment_class_label)
 
         layout.addWidget(segment_frame)
@@ -508,7 +634,7 @@ class LabelPanel(QWidget):
     def clear_segment_start(self):
         """Clear segment start display."""
         self.segment_start_label.setText("Segment Start: --")
-        self.segment_class_label.setText("Class: (press 1-9 to label)")
+        self.segment_class_label.setText("Class: (press 0-9 to label)")
 
     def update_segment_class(self, scene_class: SceneState):
         """Update segment class display."""
@@ -621,6 +747,7 @@ class SceneLabeler(QMainWindow):
         self.video_labels: Optional[VideoLabels] = None
         self.current_game_index = 0
         self.segment_start: Optional[float] = None
+        self.current_class: Optional[SceneState] = None  # For continuous labeling
         self.undo_stack: list[tuple] = []  # (game_index, label_index)
 
         self._setup_ui()
@@ -655,7 +782,7 @@ class SceneLabeler(QMainWindow):
         main_layout.addWidget(right_panel, stretch=1)
 
         # Status bar
-        self.statusBar().showMessage("Ready. Press S to start a segment, 1-9 to label.")
+        self.statusBar().showMessage("Ready. Press 0-9 to start labeling (continuous mode).")
 
     def _setup_shortcuts(self):
         """Setup keyboard shortcuts."""
@@ -668,8 +795,9 @@ class SceneLabeler(QMainWindow):
         QShortcut(Qt.Key_S, self, self._mark_segment_start)
         QShortcut(Qt.Key_E, self, self._mark_segment_end)
 
-        # Class assignment (1-9)
-        for i in range(1, 10):
+        # Class assignment (0-9)
+        # 0 = non_gameplay, 1-9 = gameplay scene states
+        for i in range(0, 10):
             QShortcut(getattr(Qt, f"Key_{i}"), self, lambda x=i: self._assign_class(x))
 
         # Stage and game
@@ -751,70 +879,130 @@ class SceneLabeler(QMainWindow):
             self.player.step_forward()
 
     def _mark_segment_start(self):
-        """Mark the start of a segment."""
+        """Mark the start of a segment (or reset current label start)."""
+        # If we're in continuous mode with an active label, finalize it first
+        if self.current_class is not None:
+            self._finalize_current_label()
+
         self.segment_start = self.player.get_current_time()
+        self.current_class = None
         self.label_panel.update_segment_start(self.segment_start)
         self.statusBar().showMessage(
-            f"Segment start: {self.segment_start:.1f}s. Press 1-9 to assign class."
+            f"Segment start: {self.segment_start:.1f}s. Press 0-9 to assign class."
         )
 
     def _mark_segment_end(self):
-        """Mark the end of a segment (without class)."""
+        """Finalize the current label at current position."""
+        if self.current_class is not None:
+            # In continuous mode - finalize the current label
+            if self._finalize_current_label():
+                return
+
         if self.segment_start is None:
-            self.statusBar().showMessage("Press S first to mark segment start.")
+            self.statusBar().showMessage("Press S first to mark segment start, or press 0-9 to start labeling.")
             return
-        # This just shows where end would be
+
+        # Show where end would be
         end_time = self.player.get_current_time()
         self.statusBar().showMessage(
-            f"Segment: {self.segment_start:.1f}s - {end_time:.1f}s. Press 1-9 to assign class."
+            f"Segment: {self.segment_start:.1f}s - {end_time:.1f}s. Press 0-9 to assign class."
         )
 
     def _assign_class(self, class_num: int):
-        """Assign a class to the current segment."""
+        """Assign a class to the current segment.
+
+        Continuous labeling mode:
+        - First press: Sets the start time and class (label extends as you navigate)
+        - Subsequent press of SAME key: Does nothing (you're still in that class)
+        - Press of DIFFERENT key: Ends current label at current time, starts new one
+        """
         if class_num not in SCENE_LABELS:
             return
 
-        if self.segment_start is None:
-            # Use current position as start, allow user to set class for "now"
-            self.segment_start = self.player.get_current_time()
-
-        end_time = self.player.get_current_time()
-
-        # Ensure start < end
-        if end_time <= self.segment_start:
-            # Swap or extend slightly
-            if end_time == self.segment_start:
-                end_time = self.segment_start + 0.5
-            else:
-                self.segment_start, end_time = end_time, self.segment_start
-
-        scene_class = SCENE_LABELS[class_num]
-
-        # Create label
-        label = SegmentLabel(
-            start_sec=round(self.segment_start, 1),
-            end_sec=round(end_time, 1),
-            scene_class=scene_class.value,
-        )
-
-        # Add to current game
+        new_class = SCENE_LABELS[class_num]
+        current_time = self.player.get_current_time()
         game = self._current_game
-        game.labels.append(label)
-        game.labels.sort(key=lambda x: x.start_sec)
 
-        # Track for undo
-        label_index = game.labels.index(label)
-        self.undo_stack.append((self.current_game_index, label_index))
+        # If we're already labeling this class, do nothing
+        if self.current_class == new_class and self.segment_start is not None:
+            self.statusBar().showMessage(
+                f"Still labeling: {new_class.value} (started at {self.segment_start:.1f}s)"
+            )
+            return
 
-        # Reset segment
-        self.segment_start = None
-        self.label_panel.clear_segment_start()
+        # If we have an active label, close it first
+        if self.segment_start is not None and self.current_class is not None:
+            # Create label for the previous segment
+            start = round(self.segment_start, 1)
+            end = round(current_time, 1)
+
+            # Only create label if it has positive duration
+            if end > start:
+                label = SegmentLabel(
+                    start_sec=start,
+                    end_sec=end,
+                    scene_class=self.current_class.value,
+                )
+                game.labels.append(label)
+                game.labels.sort(key=lambda x: x.start_sec)
+
+                # Track for undo
+                label_index = game.labels.index(label)
+                self.undo_stack.append((self.current_game_index, label_index))
+
+                self.statusBar().showMessage(
+                    f"Closed: {start:.1f}s - {end:.1f}s = {self.current_class.value}"
+                )
+
+        # Start new label at current time with new class
+        self.segment_start = current_time
+        self.current_class = new_class
+        self.label_panel.update_segment_start(self.segment_start)
+        self.label_panel.update_segment_class(new_class)
 
         # Update UI
         self._update_ui()
         self.statusBar().showMessage(
-            f"Added: {label.start_sec:.1f}s - {label.end_sec:.1f}s = {scene_class.value}"
+            f"Labeling: {new_class.value} (from {current_time:.1f}s - press different key to end)"
         )
+
+    def _finalize_current_label(self):
+        """Finalize the current label at the current time position."""
+        if self.segment_start is None or self.current_class is None:
+            return False
+
+        current_time = self.player.get_current_time()
+        game = self._current_game
+
+        start = round(self.segment_start, 1)
+        end = round(current_time, 1)
+
+        # Only create label if it has positive duration
+        if end > start:
+            label = SegmentLabel(
+                start_sec=start,
+                end_sec=end,
+                scene_class=self.current_class.value,
+            )
+            game.labels.append(label)
+            game.labels.sort(key=lambda x: x.start_sec)
+
+            # Track for undo
+            label_index = game.labels.index(label)
+            self.undo_stack.append((self.current_game_index, label_index))
+
+            self.statusBar().showMessage(
+                f"Finalized: {start:.1f}s - {end:.1f}s = {self.current_class.value}"
+            )
+
+            # Reset
+            self.segment_start = None
+            self.current_class = None
+            self.label_panel.clear_segment_start()
+            self._update_ui()
+            return True
+
+        return False
 
     def _set_stage(self):
         """Open stage selection dialog."""
@@ -825,7 +1013,16 @@ class SceneLabeler(QMainWindow):
             self.statusBar().showMessage(f"Stage set to: {dialog.get_stage()}")
 
     def _mark_game_boundary(self):
-        """Mark a new game boundary at current position."""
+        """Mark a new game boundary at current position.
+
+        Convention: Mark game boundaries at:
+        - Game start: First frame after GO! disappears (gameplay begins)
+        - Game end: Frame when GAME! appears (gameplay ends)
+        """
+        # Finalize any active label first
+        if self.current_class is not None:
+            self._finalize_current_label()
+
         current_time = self.player.get_current_time()
 
         # End current game
@@ -903,22 +1100,87 @@ class SceneLabeler(QMainWindow):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Scene Labeler for SSBU videos")
-    parser.add_argument("video", help="Path to video file")
+    parser = argparse.ArgumentParser(
+        description="Scene Labeler for SSBU videos",
+        epilog="Supports both local video files and YouTube URLs.",
+    )
+    parser.add_argument(
+        "video",
+        help="Path to video file or YouTube URL",
+    )
     parser.add_argument(
         "--labels", "-l",
         help="Path to labels JSON file (will be created if doesn't exist)",
     )
     args = parser.parse_args()
 
-    # Check video exists
-    video_path = Path(args.video)
-    if not video_path.exists():
-        print(f"Error: Video not found: {video_path}")
-        sys.exit(1)
-
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+
+    video_input = args.video
+
+    # Check if it's a YouTube URL
+    if is_youtube_url(video_input):
+        video_id = extract_video_id(video_input)
+        cache_path = get_cache_path(video_input)
+
+        if cache_path.exists():
+            print(f"Using cached video: {cache_path}")
+            video_path = cache_path
+        else:
+            print(f"Downloading video: {video_input}")
+            print(f"Cache path: {cache_path}")
+
+            # Create progress dialog
+            progress = QProgressDialog("Downloading video...", "Cancel", 0, 0)
+            progress.setWindowTitle("Downloading")
+            progress.setMinimumDuration(0)
+            progress.setValue(0)
+            progress.setAutoClose(True)
+
+            # Create download thread
+            download_thread = DownloadThread(video_input, cache_path)
+
+            def on_progress(msg):
+                progress.setLabelText(msg)
+
+            def on_finished(path):
+                progress.close()
+
+            def on_error(msg):
+                progress.close()
+                QMessageBox.critical(None, "Download Error", msg)
+                sys.exit(1)
+
+            download_thread.progress.connect(on_progress)
+            download_thread.finished_download.connect(on_finished)
+            download_thread.error.connect(on_error)
+
+            download_thread.start()
+
+            # Show progress dialog (blocking)
+            progress.exec_()
+
+            # Wait for thread to finish
+            download_thread.wait()
+
+            if not cache_path.exists():
+                print("Download failed or was cancelled")
+                sys.exit(1)
+
+            video_path = cache_path
+
+        # Set default labels path based on video ID
+        if not args.labels and video_id:
+            labels_dir = Path("data/scene_classifier/raw_labels")
+            labels_dir.mkdir(parents=True, exist_ok=True)
+            args.labels = str(labels_dir / f"{video_id}.json")
+    else:
+        # Local file
+        video_path = Path(video_input)
+        if not video_path.exists():
+            print(f"Error: Video not found: {video_path}")
+            sys.exit(1)
 
     window = SceneLabeler(str(video_path), args.labels)
     window.show()
