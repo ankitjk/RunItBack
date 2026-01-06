@@ -24,7 +24,9 @@ RunItBack is a Python CLI tool that analyzes Super Smash Bros. Ultimate (SSBU) r
 
 ### Detection Approach
 - **Damage Tracking**: PaddleOCR reads damage percentages every 0.5s
+- **Scene Classification**: ML model (ConvNeXt-Tiny ONNX) classifies positional states
 - **State Classification**: Based on who took damage (advantage = you hit them)
+- **Neutral Reset**: Position-based (`both_grounded` → neutral) with time-based fallback
 - **Stock Loss Detection**: Confirmed by 2 consecutive low-damage frames after high damage
 - **Segment Filtering**: Minimum duration thresholds reduce noise (1s neutral, 1.5s adv/disadv)
 
@@ -36,6 +38,11 @@ RunItBack is a Python CLI tool that analyzes Super Smash Bros. Ultimate (SSBU) r
 | `STOCK_LOSS_COOLDOWN` | 10.0s | Min time between stock losses per player |
 | `CONFIRM_FRAMES` | 3 | Consecutive low-damage frames to confirm stock loss |
 | `MIN_KILL_DAMAGE` | 50 | Minimum damage before stock loss is plausible |
+
+### Performance Optimizations
+- **Skip OCR outside game bounds**: Frames before GO! or after GAME! skip OCR entirely
+- **Parallel OCR**: Multiprocessing distributes OCR across workers (2-4x speedup)
+- **Batch scene classification**: Scene classifier processes all frames in one batch
 
 ## Tournament-Legal Stages (Hazards Off)
 
@@ -144,7 +151,8 @@ Future enhancements:
 | `runitback/cli.py` | CLI interface and game detection logic |
 | `runitback/classification/detector.py` | **Game state detection** (neutral/advantage/disadvantage) |
 | `runitback/classification/states.py` | Data structures (GameState, FrameState, StateSegment, StockLoss) |
-| `runitback/cv/ocr.py` | PaddleOCR damage percentage reading |
+| `runitback/cv/ocr.py` | PaddleOCR damage percentage reading (with parallel batch support) |
+| `runitback/cv/scene_classifier.py` | ML scene classification (ConvNeXt-Tiny ONNX) |
 | `runitback/cv/ui_detector.py` | HUD detection, stock counting, frame type classification |
 | `runitback/cv/stage_detector.py` | Stage detection with histogram matching and platform counting |
 | `runitback/cv/character_detector.py` | Character detection (Gemini + fallback template matching) |

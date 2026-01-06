@@ -2,11 +2,136 @@
 
 This document chronicles the development process for RunItBack, including methods tried, what worked, what didn't, and the current state of the codebase.
 
-**Last Updated:** January 2, 2026
+**Last Updated:** January 6, 2026
 
 ---
 
 ## Changelog
+
+### January 6, 2026 - Performance Optimizations & Scene Classification
+
+**Session Goal:** Improve analysis performance by optimizing OCR processing
+
+**Problem:**
+- Analysis took very long on videos with significant non-gameplay content (menus, character select, etc.)
+- PaddleOCR is the main bottleneck (~100-200ms per frame)
+- OCR was running on all frames including non-gameplay segments
+
+**Analysis of Bottlenecks:**
+- Scene classification: ~15-20ms per frame (already fast)
+- Stock count detection: ~5-10ms per frame
+- **PaddleOCR: ~100-200ms per frame** (main bottleneck)
+
+**Optimization Options Evaluated:**
+
+| Option | Description | Speedup | Status |
+|--------|-------------|---------|--------|
+| 1 | Skip OCR outside game boundaries | Variable (10-50%) | ✅ Implemented |
+| 2 | Lower OCR sample rate | Not viable | Rejected (damage can change every 0.5s) |
+| 3 | Batch OCR | Not feasible | Rejected (PaddleOCR doesn't support batching) |
+| 4 | Custom digit recognizer | 10-20x | Deferred (requires training) |
+| 5 | Multiprocessing OCR | 2-4x | ✅ Implemented |
+
+**Option 1: Skip OCR Outside Game Boundaries**
+
+Uses GO!/GAME! detection (already implemented) to skip OCR for frames outside game bounds:
+- Frames before first GO! screen → skip OCR
+- Frames after GAME! screen → skip OCR
+- Only process frames during actual gameplay
+
+**Implementation:**
+- Added `_is_within_game_bounds()` method to `GameStateDetector`
+- Modified `_extract_frame_states()` to check bounds before adding to OCR queue
+- Logs count of skipped frames for visibility
+
+**Option 5: Multiprocessing OCR**
+
+Uses Python multiprocessing to distribute OCR across multiple workers:
+- Each worker initializes its own PaddleOCR instance
+- Spawns worker pool with `spawn` context (required for macOS)
+- Falls back to sequential processing for small batches (<4 frames)
+
+**Implementation:**
+- Added `read_damage_batch_parallel()` function to `ocr.py`
+- Added `_init_ocr_worker()` and `_process_single_roi()` helper functions
+- Added `use_parallel_ocr` and `ocr_workers` parameters to `GameStateDetector`
+
+**Files Modified:**
+- `runitback/cv/ocr.py` - Added parallel OCR functions
+- `runitback/classification/detector.py` - Integrated both optimizations
+
+**Expected Performance Impact:**
+- Videos with 50% non-gameplay: ~2x speedup from Option 1
+- Parallel OCR: ~2-4x speedup depending on CPU cores
+- Combined: Up to 4-8x speedup for videos with significant non-gameplay
+
+---
+
+### January 5, 2026 - Scene Classifier Training & Integration
+
+**Session Goal:** Train ML model for position-based game state detection
+
+**Problem:**
+- Time-based neutral reset (3s without damage) was inaccurate
+- No way to detect specific disadvantage situations (juggle, offstage, ledgetrap)
+- Needed position-aware state classification
+
+**Solution:** ConvNeXt-Tiny scene classifier trained on labeled gameplay frames
+
+**Tools Created:**
+
+1. **`tools/scene_labeler.py`** - PyQt5 video labeling application
+   - Keyboard shortcuts for segment labeling (1-9 for classes)
+   - Video playback with speed control (0.25x-2x)
+   - Stage tagging per game
+   - Export to JSON format
+
+2. **`tools/extract_labeled_frames.py`** - Frame extraction from labels
+   - Extracts frames at 0.5s intervals
+   - Creates train/val/test splits (70/15/15)
+   - Handles class balancing
+
+3. **`tools/train_scene_classifier.py`** - Training script
+   - ConvNeXt-Tiny with ImageNet pretrained weights
+   - Mixed precision training (AMP)
+   - Cosine learning rate scheduler
+   - Early stopping
+
+**Scene Classes (7 trained):**
+| Class | Description |
+|-------|-------------|
+| `both_grounded` | Both players on stage, feet on ground → NEUTRAL |
+| `one_airborne` | One in air (juggle situation) |
+| `both_airborne` | Both in air (active exchange) |
+| `one_offstage` | One past ledge (edgeguard) |
+| `both_offstage` | Both offstage (aggressive edgeguard) |
+| `respawning` | Invincibility platform visible |
+| `non_gameplay` | Menus, loading, results screen |
+
+**Training Results:**
+- Dataset: ~3,500 labeled frames from 5 videos
+- Validation accuracy: ~92%
+- Model size: 110MB (ONNX)
+- Inference time: ~6.5ms per frame on M2 Pro
+
+**Integration (`runitback/cv/scene_classifier.py`):**
+- ONNX Runtime inference
+- Temporal smoothing (5-frame median filter)
+- Graceful fallback when model unavailable
+
+**Integration (`runitback/classification/detector.py`):**
+- Position-based neutral reset: `both_grounded` → immediate neutral
+- Disadvantage type mapping: scene state → DisadvantageType enum
+- Batch classification for efficiency
+
+**Files Created:**
+- `tools/scene_labeler.py` - Labeling application
+- `tools/extract_labeled_frames.py` - Frame extraction
+- `tools/train_scene_classifier.py` - Training script
+- `runitback/cv/scene_classifier.py` - Inference module
+- `data/models/scene_classifier.onnx` - Trained model
+
+---
 
 ### January 2, 2026 - Character Detection Fix & Skills
 
