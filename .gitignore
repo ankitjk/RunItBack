@@ -63,3 +63,8 @@ debug_frames/
 # Cache directories (Gemini API results, video downloads)
 .cache/
 .video_cache/
+
+# Scene classifier data (large, regenerable from raw_labels)
+data/scene_classifier/frames/
+data/scene_classifier/splits/
+data/models/
