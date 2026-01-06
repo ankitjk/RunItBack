@@ -28,6 +28,7 @@ import cv2
 import numpy as np
 
 from runitback.classification.states import (
+    DisadvantageType,
     FrameState,
     GameState,
     GameStateAnalysis,
@@ -66,13 +67,15 @@ class GameStateDetector:
         use_gemini_stock_detection: bool = False,
         use_smart_gemini: bool = True,
         gemini_api_key: Optional[str] = None,
+        use_scene_classification: bool = True,
     ):
         """Initialize the detector.
 
         Args:
             player_perspective: Which player to analyze (1 or 2)
             hit_threshold: Minimum damage increase to count as a hit
-            neutral_reset_time: Seconds without damage to return to neutral
+            neutral_reset_time: Seconds without damage to return to neutral.
+                Used as fallback when scene classification is unavailable.
             use_gemini_stock_detection: Enable FULL Gemini detection (check every frame).
                 More accurate but highest cost (~$0.0001 per frame).
             use_smart_gemini: Enable SMART Gemini detection (default True).
@@ -82,6 +85,9 @@ class GameStateDetector:
                 Cost: ~$0.0001 per uncertain frame (typically 1-5 per game).
             gemini_api_key: Gemini API key. If not provided, uses GEMINI_API_KEY
                 environment variable.
+            use_scene_classification: Enable ML-based scene classification for
+                position-based neutral reset. When both players are grounded,
+                returns to neutral immediately instead of waiting for timeout.
         """
         self.player_perspective = player_perspective
         self.hit_threshold = hit_threshold
@@ -89,6 +95,22 @@ class GameStateDetector:
         self.use_gemini_stock_detection = use_gemini_stock_detection
         self.use_smart_gemini = use_smart_gemini
         self.gemini_api_key = gemini_api_key or os.environ.get("GEMINI_API_KEY")
+        self.use_scene_classification = use_scene_classification
+
+        # Import scene classifier if enabled
+        self._scene_classifier = None
+        if self.use_scene_classification:
+            try:
+                from runitback.cv.scene_classifier import SceneClassifier
+                self._scene_classifier = SceneClassifier()
+                if self._scene_classifier.available:
+                    logger.info("Scene classification enabled for position-based neutral reset")
+                else:
+                    logger.warning("Scene classifier model not available, falling back to time-based reset")
+                    self._scene_classifier = None
+            except ImportError as e:
+                logger.warning(f"Could not import SceneClassifier: {e}")
+                self._scene_classifier = None
 
         # Import stock counter detector if any Gemini mode is enabled
         self._stock_counter_tracker = None
@@ -166,17 +188,25 @@ class GameStateDetector:
         )
 
     def _extract_frame_states(self, frames: list) -> list[FrameState]:
-        """Extract damage percentages and stock information from frames.
+        """Extract damage percentages, stock information, and scene state from frames.
 
         Args:
             frames: List of Frame objects
 
         Returns:
-            List of FrameState with damage values and stock counts
+            List of FrameState with damage values, stock counts, and scene state
         """
         frame_states: list[FrameState] = []
         prev_p1_damage: Optional[float] = None
         prev_p2_damage: Optional[float] = None
+
+        # Batch scene classification for efficiency
+        scene_states = []
+        if self._scene_classifier:
+            images = [f.image for f in frames]
+            classifications = self._scene_classifier.classify_batch(images)
+            scene_states = [c.state.value for c in classifications]
+            logger.info(f"Classified {len(scene_states)} frames with scene classifier")
 
         for i, frame in enumerate(frames):
             # Extract damage ROIs
@@ -190,12 +220,16 @@ class GameStateDetector:
             # Detect stock counts from HUD stock icons
             p1_stocks, p2_stocks = detect_stock_counts(frame.image)
 
+            # Get scene state if available
+            scene_state = scene_states[i] if scene_states else None
+
             # Log damage readings periodically for debugging
             if i % 20 == 0:  # Every 10 seconds at 0.5s intervals
                 logger.debug(
                     f"Frame {i} ({frame.timestamp:.1f}s): "
                     f"P1={p1_damage}% (conf={p1_conf:.2f}), "
-                    f"P2={p2_damage}% (conf={p2_conf:.2f})"
+                    f"P2={p2_damage}% (conf={p2_conf:.2f}), "
+                    f"scene={scene_state}"
                 )
 
             # Log stock counts periodically for debugging
@@ -227,6 +261,7 @@ class GameStateDetector:
                     p1_visible=p1_visible,
                     p2_visible=p2_visible,
                     state=GameState.UNKNOWN,
+                    scene_state=scene_state,
                 )
             )
 
@@ -525,6 +560,9 @@ class GameStateDetector:
             p1_got_hit = p1_delta >= self.hit_threshold
             p2_got_hit = p2_delta >= self.hit_threshold
 
+            # Determine disadvantage type from scene state
+            disadvantage_type = self._get_disadvantage_type(fs.scene_state)
+
             # State transition logic
             if p1_got_hit and p2_got_hit:
                 # Trade - both took damage
@@ -549,19 +587,23 @@ class GameStateDetector:
                 # No significant damage this frame
                 # Check if we should return to neutral
                 if current_state != GameState.NEUTRAL and last_hit_time is not None:
-                    time_since_hit = fs.timestamp - last_hit_time
-                    # Return to neutral if:
-                    # 1. Enough time has passed
-                    # 2. Both players are visible (on stage)
-                    if (
-                        time_since_hit >= self.neutral_reset_time
-                        and fs.p1_visible
-                        and fs.p2_visible
-                    ):
+                    # Position-based reset: both_grounded = return to neutral immediately
+                    if fs.scene_state == "both_grounded":
                         current_state = GameState.NEUTRAL
                         last_hit_time = None
+                    else:
+                        # Fallback: time-based reset when scene classification unavailable
+                        time_since_hit = fs.timestamp - last_hit_time
+                        if (
+                            time_since_hit >= self.neutral_reset_time
+                            and fs.p1_visible
+                            and fs.p2_visible
+                        ):
+                            current_state = GameState.NEUTRAL
+                            last_hit_time = None
 
             fs.state = current_state
+            fs.disadvantage_type = disadvantage_type if current_state != GameState.NEUTRAL else DisadvantageType.UNKNOWN
 
             # Update previous damage values
             if fs.p1_damage is not None:
@@ -594,6 +636,43 @@ class GameStateDetector:
             if 0 <= timestamp - start_time < cooldown:
                 return True
         return False
+
+    def _get_disadvantage_type(self, scene_state: Optional[str]) -> DisadvantageType:
+        """Map scene state to disadvantage type.
+
+        Args:
+            scene_state: Scene classification result (string value of SceneState)
+
+        Returns:
+            DisadvantageType based on scene classification
+        """
+        if scene_state is None:
+            return DisadvantageType.UNKNOWN
+
+        # Map scene states to disadvantage types
+        # Note: We can't determine WHO is in disadvantage from scene alone
+        # That's determined by damage tracking (who took the hit)
+        scene_to_disadvantage = {
+            # Juggle situations
+            "one_airborne": DisadvantageType.JUGGLE,
+            "both_airborne": DisadvantageType.JUGGLE,
+            # Offstage/edgeguard situations
+            "one_offstage": DisadvantageType.OFFSTAGE,
+            "both_offstage": DisadvantageType.OFFSTAGE,
+            # Ledgetrap situations
+            "one_on_ledge": DisadvantageType.LEDGETRAP,
+            "both_on_ledge": DisadvantageType.LEDGETRAP,
+            # Tech chase situations
+            "one_knocked_down": DisadvantageType.TECH_CHASE,
+            "both_knocked_down": DisadvantageType.TECH_CHASE,
+            # Respawning
+            "respawning": DisadvantageType.RESPAWNING,
+            # Neutral (shouldn't reach here in disadvantage)
+            "both_grounded": DisadvantageType.UNKNOWN,
+            "non_gameplay": DisadvantageType.UNKNOWN,
+        }
+
+        return scene_to_disadvantage.get(scene_state, DisadvantageType.UNKNOWN)
 
     def _smart_gemini_postprocess(
         self,
@@ -876,6 +955,27 @@ class GameStateDetector:
                 fs.p1_stock_loss = True
                 logger.warning(f"Smart Gemini couldn't determine GAME! loser at {fs.timestamp:.1f}s, defaulting to P1")
 
+    def _get_dominant_disadvantage_type(
+        self, frame_states: list[FrameState]
+    ) -> DisadvantageType:
+        """Get the most common disadvantage type in a set of frames.
+
+        Args:
+            frame_states: List of FrameState to analyze
+
+        Returns:
+            Most common DisadvantageType (excluding UNKNOWN if possible)
+        """
+        from collections import Counter
+
+        types = [fs.disadvantage_type for fs in frame_states if fs.disadvantage_type != DisadvantageType.UNKNOWN]
+        if not types:
+            return DisadvantageType.UNKNOWN
+
+        # Return most common type
+        counter = Counter(types)
+        return counter.most_common(1)[0][0]
+
     def _build_segments(self, frame_states: list[FrameState]) -> list[StateSegment]:
         """Build continuous segments from frame states.
 
@@ -898,9 +998,9 @@ class GameStateDetector:
             if fs.state != current_state:
                 # State changed - close current segment
                 # Collect stock losses from frames in this segment
-                stock_losses = self._collect_stock_losses(
-                    frame_states[segment_start_idx:i]
-                )
+                segment_frames = frame_states[segment_start_idx:i]
+                stock_losses = self._collect_stock_losses(segment_frames)
+                disadvantage_type = self._get_dominant_disadvantage_type(segment_frames)
                 # End time is the PREVIOUS frame's timestamp (last frame in this segment)
                 segments.append(
                     StateSegment(
@@ -910,6 +1010,7 @@ class GameStateDetector:
                         start_frame=segment_start.frame_index,
                         end_frame=prev_fs.frame_index,
                         stock_losses=stock_losses,
+                        disadvantage_type=disadvantage_type,
                     )
                 )
                 current_state = fs.state
@@ -919,9 +1020,9 @@ class GameStateDetector:
 
         # Close final segment
         final_fs = frame_states[-1]
-        stock_losses = self._collect_stock_losses(
-            frame_states[segment_start_idx:]
-        )
+        segment_frames = frame_states[segment_start_idx:]
+        stock_losses = self._collect_stock_losses(segment_frames)
+        disadvantage_type = self._get_dominant_disadvantage_type(segment_frames)
         segments.append(
             StateSegment(
                 state=current_state,
@@ -930,6 +1031,7 @@ class GameStateDetector:
                 start_frame=segment_start.frame_index,
                 end_frame=final_fs.frame_index,
                 stock_losses=stock_losses,
+                disadvantage_type=disadvantage_type,
             )
         )
 

@@ -12,6 +12,13 @@ from runitback.cv.ui_detector import (
 )
 from runitback.cv.stage_detector import detect_stage, detect_stage_from_frames, Stage
 from runitback.cv.character_detector import detect_characters, detect_characters_from_frames
+from runitback.cv.scene_classifier import (
+    SceneState,
+    SceneClassification,
+    SceneClassifier,
+    classify_scene,
+    get_scene_classifier,
+)
 
 __all__ = [
     "detect_ui_state",
@@ -27,4 +34,9 @@ __all__ = [
     "Stage",
     "detect_characters",
     "detect_characters_from_frames",
+    "SceneState",
+    "SceneClassification",
+    "SceneClassifier",
+    "classify_scene",
+    "get_scene_classifier",
 ]
