@@ -41,6 +41,7 @@ SCENE_CLASSES = [
     "both_on_ledge",
     "one_knocked_down",
     "both_knocked_down",
+    "respawning",
 ]
 
 NUM_CLASSES = len(SCENE_CLASSES)

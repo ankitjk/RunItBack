@@ -78,6 +78,7 @@ from PyQt5.QtWidgets import (
     QProgressDialog,
     QPushButton,
     QShortcut,
+    QSizePolicy,
     QSlider,
     QSplitter,
     QTableWidget,
@@ -200,6 +201,7 @@ class SceneState(Enum):
     BOTH_ON_LEDGE = "both_on_ledge"
     ONE_KNOCKED_DOWN = "one_knocked_down"
     BOTH_KNOCKED_DOWN = "both_knocked_down"
+    RESPAWNING = "respawning"  # One player on angel platform after stock loss
 
 
 SCENE_LABELS = {
@@ -213,6 +215,7 @@ SCENE_LABELS = {
     7: SceneState.BOTH_ON_LEDGE,
     8: SceneState.ONE_KNOCKED_DOWN,
     9: SceneState.BOTH_KNOCKED_DOWN,
+    10: SceneState.RESPAWNING,
 }
 
 SCENE_COLORS = {
@@ -226,6 +229,7 @@ SCENE_COLORS = {
     SceneState.BOTH_ON_LEDGE: "#E91E63",      # Pink
     SceneState.ONE_KNOCKED_DOWN: "#795548",   # Brown
     SceneState.BOTH_KNOCKED_DOWN: "#607D8B",  # Blue Grey
+    SceneState.RESPAWNING: "#FFEB3B",         # Yellow - respawn platform
 }
 
 STAGES = [
@@ -377,6 +381,7 @@ class VideoPlayer(QWidget):
         self.current_frame = 0
         self.playing = False
         self.playback_speed = 1.0
+        self._current_frame_data: Optional[np.ndarray] = None  # Cache for resizing
 
         self._setup_ui()
         self._setup_timer()
@@ -385,11 +390,14 @@ class VideoPlayer(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Video display
+        # Video display - scales with window
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setMinimumSize(640, 360)
+        self.video_label.setMinimumSize(320, 180)  # Smaller minimum to allow shrinking
         self.video_label.setStyleSheet("background-color: black;")
+        self.video_label.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Expanding
+        )
         layout.addWidget(self.video_label, stretch=1)
 
         # Timeline slider
@@ -447,20 +455,9 @@ class VideoPlayer(QWidget):
         if not ret:
             return
 
-        # Convert to RGB and display
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        h, w, ch = frame_rgb.shape
-        bytes_per_line = ch * w
-        image = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
-
-        # Scale to fit
-        pixmap = QPixmap.fromImage(image)
-        scaled = pixmap.scaled(
-            self.video_label.size(),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
-        )
-        self.video_label.setPixmap(scaled)
+        # Convert to RGB and cache for resize events
+        self._current_frame_data = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        self._update_display()
 
         # Update timeline (block signals to prevent recursion)
         self.timeline.blockSignals(True)
@@ -475,6 +472,33 @@ class VideoPlayer(QWidget):
         )
 
         self.frame_changed.emit(self.current_frame, current_time)
+
+    def _update_display(self):
+        """Update the video display with the cached frame (used for resizing)."""
+        if self._current_frame_data is None:
+            return
+
+        h, w, ch = self._current_frame_data.shape
+        bytes_per_line = ch * w
+        image = QImage(
+            self._current_frame_data.data, w, h, bytes_per_line, QImage.Format_RGB888
+        )
+
+        # Scale to fit label size
+        pixmap = QPixmap.fromImage(image)
+        scaled = pixmap.scaled(
+            self.video_label.size(),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+        self.video_label.setPixmap(scaled)
+
+    def resizeEvent(self, event):
+        """Handle resize events to scale video with window."""
+        super().resizeEvent(event)
+        # Re-render the cached frame at the new size
+        if self._current_frame_data is not None:
+            self._update_display()
 
     def _format_time(self, seconds: float) -> str:
         """Format seconds as M:SS.s"""
@@ -673,6 +697,91 @@ class LabelPanel(QWidget):
                 pass
 
 
+class LegendPanel(QWidget):
+    """Panel showing keyboard shortcuts and scene class legend."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(2)
+
+        # Scene classes legend
+        layout.addWidget(QLabel("<b>Scene Classes (0-9, R):</b>"))
+
+        # Class descriptions
+        class_info = [
+            ("0", "non_gameplay", "Menus, loading, results"),
+            ("1", "both_grounded", "Both on stage, grounded"),
+            ("2", "one_airborne", "One jumping/launched"),
+            ("3", "both_airborne", "Both in the air"),
+            ("4", "one_offstage", "One past stage edge"),
+            ("5", "both_offstage", "Both offstage"),
+            ("6", "one_on_ledge", "One grabbing ledge"),
+            ("7", "both_on_ledge", "Both on ledge"),
+            ("8", "one_knocked_down", "One lying flat (tech)"),
+            ("9", "both_knocked_down", "Both down (trade)"),
+            ("R", "respawning", "On angel platform"),
+        ]
+
+        for key, class_name, description in class_info:
+            row = QHBoxLayout()
+            row.setSpacing(4)
+
+            # Key badge
+            key_label = QLabel(f"<b>{key}</b>")
+            key_label.setFixedWidth(20)
+            key_label.setAlignment(Qt.AlignCenter)
+            row.addWidget(key_label)
+
+            # Color indicator - convert key to int if numeric, else use special mapping
+            key_int = int(key) if key.isdigit() else {"R": 10}.get(key)
+            state = SCENE_LABELS.get(key_int)
+            color = SCENE_COLORS.get(state, "#888888")
+            color_box = QFrame()
+            color_box.setFixedSize(12, 12)
+            color_box.setStyleSheet(f"background-color: {color}; border-radius: 2px;")
+            row.addWidget(color_box)
+
+            # Description
+            desc_label = QLabel(f"<small>{description}</small>")
+            desc_label.setWordWrap(True)
+            row.addWidget(desc_label, stretch=1)
+
+            layout.addLayout(row)
+
+        # Separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(separator)
+
+        # Other shortcuts
+        layout.addWidget(QLabel("<b>Controls:</b>"))
+        shortcuts = [
+            ("Space", "Play/Pause"),
+            ("← →", "Prev/Next frame"),
+            ("E", "Finalize label"),
+            ("G", "Game boundary"),
+            ("T", "Set stage"),
+            ("Ctrl+S", "Save"),
+            ("Ctrl+Z", "Undo"),
+        ]
+
+        for key, action in shortcuts:
+            row = QHBoxLayout()
+            row.setSpacing(4)
+            key_label = QLabel(f"<b>{key}</b>")
+            key_label.setFixedWidth(50)
+            row.addWidget(key_label)
+            row.addWidget(QLabel(f"<small>{action}</small>"), stretch=1)
+            layout.addLayout(row)
+
+        layout.addStretch()
+
+
 class ClassDistributionPanel(QWidget):
     """Panel showing class distribution statistics."""
 
@@ -682,7 +791,7 @@ class ClassDistributionPanel(QWidget):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Class Distribution:"))
+        layout.addWidget(QLabel("<b>Class Distribution:</b>"))
 
         self.bars = {}
         for state in SceneState:
@@ -772,6 +881,10 @@ class SceneLabeler(QMainWindow):
         # Right side: panels
         right_panel = QSplitter(Qt.Vertical)
 
+        # Legend panel (top)
+        self.legend_panel = LegendPanel()
+        right_panel.addWidget(self.legend_panel)
+
         self.label_panel = LabelPanel()
         self.label_panel.label_selected.connect(self.player.seek_time)
         right_panel.addWidget(self.label_panel)
@@ -779,10 +892,13 @@ class SceneLabeler(QMainWindow):
         self.dist_panel = ClassDistributionPanel()
         right_panel.addWidget(self.dist_panel)
 
+        # Set initial sizes (legend smaller, labels bigger)
+        right_panel.setSizes([250, 300, 150])
+
         main_layout.addWidget(right_panel, stretch=1)
 
         # Status bar
-        self.statusBar().showMessage("Ready. Press 0-9 to start labeling (continuous mode).")
+        self.statusBar().showMessage("Ready. Press 0-9 or R to start labeling (continuous mode).")
 
     def _setup_shortcuts(self):
         """Setup keyboard shortcuts."""
@@ -795,10 +911,11 @@ class SceneLabeler(QMainWindow):
         QShortcut(Qt.Key_S, self, self._mark_segment_start)
         QShortcut(Qt.Key_E, self, self._mark_segment_end)
 
-        # Class assignment (0-9)
-        # 0 = non_gameplay, 1-9 = gameplay scene states
+        # Class assignment (0-9, R for respawning)
+        # 0 = non_gameplay, 1-9 = gameplay scene states, R = respawning
         for i in range(0, 10):
             QShortcut(getattr(Qt, f"Key_{i}"), self, lambda x=i: self._assign_class(x))
+        QShortcut(Qt.Key_R, self, lambda: self._assign_class(10))  # R = respawning
 
         # Stage and game
         QShortcut(Qt.Key_T, self, self._set_stage)
@@ -861,8 +978,23 @@ class SceneLabeler(QMainWindow):
         self.dist_panel.update_distribution(game.labels)
 
     def _on_frame_changed(self, frame: int, timestamp: float):
-        """Handle frame change."""
-        pass  # Could highlight current label in table
+        """Handle frame change - auto-switch to correct game based on timestamp."""
+        if self.video_labels is None:
+            return
+
+        # Find which game this timestamp belongs to
+        for i, game in enumerate(self.video_labels.games):
+            # Check if timestamp falls within this game's range
+            # Use end_sec if set, otherwise assume game extends to end of video
+            game_end = game.end_sec if game.end_sec > 0 else float('inf')
+            if game.start_sec <= timestamp < game_end:
+                if i != self.current_game_index:
+                    self.current_game_index = i
+                    self._update_ui()
+                    self.statusBar().showMessage(
+                        f"Switched to Game {game.game_number} ({game.stage})"
+                    )
+                break
 
     def _on_left_key(self):
         """Handle left arrow key."""

@@ -42,6 +42,7 @@ SCENE_CLASSES = [
     "both_on_ledge",
     "one_knocked_down",
     "both_knocked_down",
+    "respawning",
 ]
 
 # Rare classes get more frequent sampling
@@ -50,11 +51,16 @@ RARE_CLASSES = {
     "both_on_ledge",
     "one_knocked_down",
     "both_knocked_down",
+    "respawning",  # Short duration, needs more samples
 }
 
 # Sampling intervals (seconds)
 DEFAULT_INTERVAL = 0.5  # Standard classes
 RARE_INTERVAL = 0.25    # Rare classes (2x more frames)
+
+# Edge padding to avoid transition frames
+# At 60 FPS, 0.15s = 9 frames of safety margin from segment boundaries
+EDGE_PADDING = 0.15
 
 
 @dataclass
@@ -147,9 +153,33 @@ def extract_frames_from_video(
             # Determine sampling interval
             interval = RARE_INTERVAL if scene_class in RARE_CLASSES else DEFAULT_INTERVAL
 
-            # Extract frames at regular intervals
-            t = start_sec
-            while t < end_sec:
+            # Apply edge padding to avoid transition frames
+            # This ensures we only sample frames well within the labeled segment
+            padded_start = start_sec + EDGE_PADDING
+            padded_end = end_sec - EDGE_PADDING
+
+            # Skip segments too short to sample safely
+            if padded_end <= padded_start:
+                # Segment is shorter than 2x padding (~0.3s)
+                # Sample single frame from the middle instead
+                t = (start_sec + end_sec) / 2
+                frame_num = int(t * fps)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+                ret, frame = cap.read()
+                if ret:
+                    time_ms = int(t * 1000)
+                    filename = f"{video_id}_g{game_num}_{time_ms:06d}_{scene_class}.jpg"
+                    class_dir = output_dir / scene_class
+                    class_dir.mkdir(parents=True, exist_ok=True)
+                    cv2.imwrite(str(class_dir / filename), frame)
+                    frames_extracted += 1
+                    stats.frames_per_class[scene_class] += 1
+                    stats.total_frames += 1
+                continue
+
+            # Extract frames at regular intervals from padded region
+            t = padded_start
+            while t < padded_end:
                 frame_num = int(t * fps)
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
                 ret, frame = cap.read()
