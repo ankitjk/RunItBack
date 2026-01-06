@@ -160,14 +160,28 @@ class SceneClassifier:
         try:
             import onnxruntime as ort
 
-            # Use CoreML on macOS if available, otherwise CPU
-            providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
-            self._session = ort.InferenceSession(
-                str(self.model_path),
-                providers=providers,
-            )
-            self._available = True
-            logger.info(f"Loaded scene classifier from {self.model_path}")
+            # Try providers in order of preference
+            # CPUExecutionProvider is most reliable
+            providers_to_try = [
+                ["CPUExecutionProvider"],
+                ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+            ]
+
+            for providers in providers_to_try:
+                try:
+                    self._session = ort.InferenceSession(
+                        str(self.model_path),
+                        providers=providers,
+                    )
+                    self._available = True
+                    active_providers = self._session.get_providers()
+                    logger.info(f"Loaded scene classifier from {self.model_path} (providers: {active_providers})")
+                    return
+                except Exception as e:
+                    logger.debug(f"Failed to load with providers {providers}: {e}")
+                    continue
+
+            logger.error("Failed to load scene classifier with any provider")
 
         except ImportError:
             logger.warning("onnxruntime not installed, scene classification disabled")
@@ -264,7 +278,10 @@ class SceneClassifier:
         )
 
     def classify_batch(self, frames: list[np.ndarray]) -> list[SceneClassification]:
-        """Classify multiple frames efficiently.
+        """Classify multiple frames.
+
+        Note: Due to ONNX model constraints, this processes frames one at a time.
+        For large batches, consider using a progress indicator.
 
         Args:
             frames: List of BGR frames
@@ -278,28 +295,31 @@ class SceneClassifier:
                 for _ in frames
             ]
 
-        # Preprocess all frames
-        tensors = [self.preprocess(f) for f in frames]
-        batch = np.concatenate(tensors, axis=0)
-
-        # Run inference
-        input_name = self._session.get_inputs()[0].name
-        outputs = self._session.run(None, {input_name: batch})
-        logits = outputs[0]
-
-        # Softmax
-        exp_logits = np.exp(logits - np.max(logits, axis=1, keepdims=True))
-        probs = exp_logits / exp_logits.sum(axis=1, keepdims=True)
+        # Process frames one at a time (ONNX model has batch size constraints)
+        # Disable temporal smoothing for batch processing to avoid state leakage
+        original_smoothing = self.temporal_smoothing
+        self.temporal_smoothing = 0
+        self._history.clear()
 
         results = []
-        for i in range(len(frames)):
-            pred_idx = np.argmax(probs[i])
-            confidence = float(probs[i][pred_idx])
+        input_name = self._session.get_inputs()[0].name
+
+        for frame in frames:
+            tensor = self.preprocess(frame)
+            outputs = self._session.run(None, {input_name: tensor})
+            logits = outputs[0][0]
+
+            # Softmax
+            exp_logits = np.exp(logits - np.max(logits))
+            probs = exp_logits / exp_logits.sum()
+
+            pred_idx = np.argmax(probs)
+            confidence = float(probs[pred_idx])
             class_name = self.CLASS_ORDER[pred_idx]
             state = self.CLASS_TO_STATE.get(class_name, SceneState.UNKNOWN)
 
             raw_probs = {
-                self.CLASS_ORDER[j]: float(probs[i][j])
+                self.CLASS_ORDER[j]: float(probs[j])
                 for j in range(len(self.CLASS_ORDER))
             }
 
@@ -308,6 +328,9 @@ class SceneClassifier:
                 confidence=confidence,
                 raw_probabilities=raw_probs,
             ))
+
+        # Restore temporal smoothing setting
+        self.temporal_smoothing = original_smoothing
 
         return results
 
