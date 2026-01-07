@@ -603,9 +603,17 @@ def display_game_summary(
 def display_state_analysis(analysis: GameStateAnalysis) -> None:
     """Display the state analysis for a game.
 
+    Uses a transition-focused format that shows:
+    1. Summary statistics
+    2. Significant interactions (>5s duration or resulted in stock loss)
+    3. Small wins/stray hits (brief interactions)
+
     Args:
         analysis: The GameStateAnalysis result
     """
+    # Constants for significance threshold
+    SIGNIFICANT_DURATION = 5.0  # Seconds to count as significant
+
     # Summary stats
     total_time = analysis.total_analyzed_time
     if total_time > 0:
@@ -628,57 +636,133 @@ def display_state_analysis(analysis: GameStateAnalysis) -> None:
         )
         console.print()
 
-    # Helper to format stock loss notes for a segment
-    def format_stock_losses(seg, player_perspective: int) -> str:
-        """Format stock loss notes for display."""
-        if not seg.stock_losses:
-            return ""
-        notes = []
-        for loss in seg.stock_losses:
-            if loss.player == player_perspective:
-                notes.append("[red]★ You lost a stock[/red]")
-            else:
-                notes.append("[green]★ Opponent lost a stock[/green]")
-        return " ".join(notes)
+    # Combine all segments and sort chronologically
+    all_segments = (
+        analysis.neutral_segments +
+        analysis.advantage_segments +
+        analysis.disadvantage_segments
+    )
+    all_segments.sort(key=lambda s: s.start_time)
 
-    # Neutral segments
-    if analysis.neutral_segments:
-        console.print("[bold]NEUTRAL SEGMENTS:[/bold]")
-        for seg in analysis.neutral_segments:
-            start = format_timestamp(seg.start_time)
-            end = format_timestamp(seg.end_time)
-            stock_notes = format_stock_losses(seg, analysis.player_perspective)
-            if stock_notes:
-                console.print(f"  {start} - {end}  {stock_notes}")
-            else:
-                console.print(f"  {start} - {end}")
+    if not all_segments:
+        return
+
+    # Categorize non-neutral segments into significant vs small
+    significant_segments = []
+    small_segments = []
+
+    for seg in all_segments:
+        if seg.state == GameState.NEUTRAL:
+            continue  # Skip neutral for categorization
+
+        # A segment is significant if:
+        # 1. Duration >= 5 seconds, OR
+        # 2. A stock was lost during it
+        has_stock_loss = bool(seg.stock_losses)
+        is_significant = seg.duration >= SIGNIFICANT_DURATION or has_stock_loss
+
+        if is_significant:
+            significant_segments.append(seg)
+        else:
+            small_segments.append(seg)
+
+    # Helper to format a segment line
+    def format_segment_line(seg, player_perspective: int) -> str:
+        """Format a single segment for display."""
+        timestamp = format_timestamp(seg.start_time)
+        duration = f"{seg.duration:.1f}s"
+
+        # State indicator
+        if seg.state == GameState.ADVANTAGE:
+            state_str = "[green]▲ Advantage[/green]"
+        elif seg.state == GameState.DISADVANTAGE:
+            state_str = "[red]▼ Disadvantage[/red]"
+        else:
+            state_str = "[white]○ Neutral[/white]"
+
+        # Disadvantage type if available
+        type_str = ""
+        if seg.state == GameState.DISADVANTAGE and seg.disadvantage_type:
+            from runitback.classification.states import DisadvantageType
+            if seg.disadvantage_type != DisadvantageType.UNKNOWN:
+                type_str = f" ({seg.disadvantage_type.display_name})"
+
+        # Stock loss indicator
+        stock_str = ""
+        if seg.stock_losses:
+            for loss in seg.stock_losses:
+                if loss.player == player_perspective:
+                    stock_str += " [red]★ Lost stock[/red]"
+                else:
+                    stock_str += " [green]★ Took stock[/green]"
+
+        return f"  {timestamp}  {state_str}{type_str} [{duration}]{stock_str}"
+
+    # Display significant interactions
+    if significant_segments:
+        console.print("[bold]SIGNIFICANT INTERACTIONS:[/bold]")
+        console.print("[dim]  (>5s duration or stock lost)[/dim]")
+        for seg in significant_segments:
+            console.print(format_segment_line(seg, analysis.player_perspective))
         console.print()
 
-    # Advantage segments
-    if analysis.advantage_segments:
-        console.print("[bold green]ADVANTAGE SEGMENTS:[/bold green]")
-        for seg in analysis.advantage_segments:
-            start = format_timestamp(seg.start_time)
-            end = format_timestamp(seg.end_time)
-            stock_notes = format_stock_losses(seg, analysis.player_perspective)
-            if stock_notes:
-                console.print(f"  {start} - {end}  {stock_notes}")
-            else:
-                console.print(f"  {start} - {end}")
+    # Display small wins/stray hits (collapsed summary)
+    if small_segments:
+        # Count by type
+        small_adv = [s for s in small_segments if s.state == GameState.ADVANTAGE]
+        small_disadv = [s for s in small_segments if s.state == GameState.DISADVANTAGE]
+
+        console.print("[bold dim]SMALL INTERACTIONS:[/bold dim]")
+        console.print(f"[dim]  (brief exchanges <5s)[/dim]")
+
+        if small_adv:
+            adv_total = sum(s.duration for s in small_adv)
+            console.print(
+                f"  [green]▲ Small wins:[/green] {len(small_adv)} "
+                f"({format_timestamp(adv_total)} total)"
+            )
+
+        if small_disadv:
+            disadv_total = sum(s.duration for s in small_disadv)
+            console.print(
+                f"  [red]▼ Stray hits:[/red] {len(small_disadv)} "
+                f"({format_timestamp(disadv_total)} total)"
+            )
+
         console.print()
 
-    # Disadvantage segments
-    if analysis.disadvantage_segments:
-        console.print("[bold red]DISADVANTAGE SEGMENTS:[/bold red]")
-        for seg in analysis.disadvantage_segments:
-            start = format_timestamp(seg.start_time)
-            end = format_timestamp(seg.end_time)
-            stock_notes = format_stock_losses(seg, analysis.player_perspective)
-            if stock_notes:
-                console.print(f"  {start} - {end}  {stock_notes}")
-            else:
-                console.print(f"  {start} - {end}")
-        console.print()
+    # Chronological transition timeline (compact view)
+    console.print("[bold]NEUTRAL TRANSITIONS:[/bold]")
+    console.print("[dim]  (timestamps when neutral was won/lost)[/dim]")
+
+    # Build transition list from segments
+    transitions = []
+    for i, seg in enumerate(all_segments):
+        if seg.state == GameState.NEUTRAL:
+            # Entering neutral = won neutral
+            transitions.append((seg.start_time, "won", None))
+        else:
+            # Entering adv/disadv = lost neutral
+            transitions.append((seg.start_time, "lost", seg.state))
+
+    # Display transitions as a compact timeline
+    timeline_parts = []
+    for timestamp, direction, state in transitions:
+        ts = format_timestamp(timestamp)
+        if direction == "won":
+            timeline_parts.append(f"[white]{ts}○[/white]")
+        elif state == GameState.ADVANTAGE:
+            timeline_parts.append(f"[green]{ts}▲[/green]")
+        else:
+            timeline_parts.append(f"[red]{ts}▼[/red]")
+
+    # Print timeline in rows of 8
+    for i in range(0, len(timeline_parts), 8):
+        row = timeline_parts[i:i+8]
+        console.print("  " + "  ".join(row))
+
+    console.print()
+    console.print("[dim]Legend: ○ Neutral  [green]▲ Advantage[/green]  [red]▼ Disadvantage[/red][/dim]")
 
 
 @app.command()
