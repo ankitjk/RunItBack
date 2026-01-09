@@ -1,6 +1,8 @@
 """OCR utilities for reading damage percentages from SSBU frames."""
 
 import logging
+import multiprocessing as mp
+import os
 import re
 from typing import Optional
 
@@ -11,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 # Lazy load PaddleOCR to avoid slow import on startup
 _ocr_instance = None
+
+# Default number of OCR workers for parallel processing
+DEFAULT_OCR_WORKERS = min(4, mp.cpu_count())
 
 
 def get_ocr():
@@ -28,6 +33,37 @@ def get_ocr():
             use_textline_orientation=False,
         )
     return _ocr_instance
+
+
+def _init_ocr_worker():
+    """Initialize OCR instance in worker process."""
+    global _ocr_instance
+    from paddleocr import PaddleOCR
+
+    _ocr_instance = PaddleOCR(
+        lang="en",
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=False,
+    )
+
+
+def _process_single_roi(args: tuple) -> tuple[int, Optional[float], float]:
+    """Process a single ROI in a worker process.
+
+    Args:
+        args: Tuple of (index, roi_bytes, roi_shape, roi_dtype, confidence_threshold)
+
+    Returns:
+        Tuple of (index, damage_value, confidence)
+    """
+    idx, roi_bytes, roi_shape, roi_dtype, confidence_threshold = args
+
+    # Reconstruct numpy array from bytes
+    roi = np.frombuffer(roi_bytes, dtype=roi_dtype).reshape(roi_shape)
+
+    damage, confidence = read_damage_percentage(roi, confidence_threshold)
+    return idx, damage, confidence
 
 
 def preprocess_damage_roi(roi: np.ndarray) -> np.ndarray:
@@ -234,3 +270,73 @@ def read_damage_with_fallback(
         return damage
 
     return previous_value
+
+
+def read_damage_batch_parallel(
+    rois: list[np.ndarray],
+    num_workers: int = DEFAULT_OCR_WORKERS,
+    confidence_threshold: float = 0.3,
+) -> list[tuple[Optional[float], float]]:
+    """Read damage percentages from multiple ROIs in parallel.
+
+    Uses multiprocessing to distribute OCR across multiple workers.
+    Each worker initializes its own PaddleOCR instance once and reuses it.
+
+    Args:
+        rois: List of BGR images containing damage percentages
+        num_workers: Number of parallel workers (default: min(4, cpu_count))
+        confidence_threshold: Minimum OCR confidence to accept result
+
+    Returns:
+        List of (damage_value, confidence) tuples in same order as input
+    """
+    if not rois:
+        return []
+
+    # For small batches, sequential processing is faster (no pool overhead)
+    if len(rois) < 4:
+        return [read_damage_percentage(roi, confidence_threshold) for roi in rois]
+
+    # Prepare data for workers - serialize numpy arrays
+    work_items = []
+    for idx, roi in enumerate(rois):
+        if roi is None or roi.size == 0:
+            work_items.append((idx, None, None, None, confidence_threshold))
+        else:
+            work_items.append((
+                idx,
+                roi.tobytes(),
+                roi.shape,
+                roi.dtype,
+                confidence_threshold,
+            ))
+
+    # Use spawn context for macOS compatibility
+    ctx = mp.get_context("spawn")
+
+    results = [None] * len(rois)
+
+    try:
+        with ctx.Pool(
+            processes=num_workers,
+            initializer=_init_ocr_worker,
+        ) as pool:
+            # Process in parallel
+            for idx, damage, confidence in pool.imap_unordered(
+                _process_single_roi,
+                [item for item in work_items if item[1] is not None],
+                chunksize=max(1, len(rois) // (num_workers * 2)),
+            ):
+                results[idx] = (damage, confidence)
+
+        # Fill in None results for empty ROIs
+        for idx, item in enumerate(work_items):
+            if item[1] is None:
+                results[idx] = (None, 0.0)
+
+    except Exception as e:
+        logger.warning(f"Parallel OCR failed, falling back to sequential: {e}")
+        # Fallback to sequential processing
+        return [read_damage_percentage(roi, confidence_threshold) for roi in rois]
+
+    return results
