@@ -30,7 +30,7 @@ This document chronicles the development process for RunItBack, including method
 | 2 | Lower OCR sample rate | Not viable | Rejected (damage can change every 0.5s) |
 | 3 | Batch OCR | Not feasible | Rejected (PaddleOCR doesn't support batching) |
 | 4 | Custom digit recognizer | 10-20x | Deferred (requires training) |
-| 5 | Multiprocessing OCR | 2-4x | ✅ Implemented |
+| 5 | Multiprocessing OCR | 2-4x | ⚠️ Implemented but disabled (pool overhead) |
 
 **Option 1: Skip OCR Outside Game Boundaries**
 
@@ -56,14 +56,19 @@ Uses Python multiprocessing to distribute OCR across multiple workers:
 - Added `_init_ocr_worker()` and `_process_single_roi()` helper functions
 - Added `use_parallel_ocr` and `ocr_workers` parameters to `GameStateDetector`
 
+**Issue Found:** Worker pool creation overhead negates parallelization benefits
+- PaddleOCR initialization takes ~10-20 seconds per worker
+- Current implementation creates new pools for each batch (P1 and P2 separately)
+- This adds significant overhead rather than reducing processing time
+- **Disabled by default** - requires persistent worker pool architecture to be effective
+
 **Files Modified:**
 - `runitback/cv/ocr.py` - Added parallel OCR functions
 - `runitback/classification/detector.py` - Integrated both optimizations
 
-**Expected Performance Impact:**
-- Videos with 50% non-gameplay: ~2x speedup from Option 1
-- Parallel OCR: ~2-4x speedup depending on CPU cores
-- Combined: Up to 4-8x speedup for videos with significant non-gameplay
+**Actual Performance:**
+- Option 1 alone provides benefit by skipping non-gameplay frames
+- 8-minute video analyzed in ~10:37 with Option 1 only
 
 ---
 

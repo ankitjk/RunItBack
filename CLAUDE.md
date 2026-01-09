@@ -40,8 +40,8 @@ RunItBack is a Python CLI tool that analyzes Super Smash Bros. Ultimate (SSBU) r
 | `MIN_KILL_DAMAGE` | 50 | Minimum damage before stock loss is plausible |
 
 ### Performance Optimizations
-- **Skip OCR outside game bounds**: Frames before GO! or after GAME! skip OCR entirely
-- **Parallel OCR**: Multiprocessing distributes OCR across workers (2-4x speedup)
+- **Skip OCR outside game bounds**: Frames before GO! or after GAME! skip OCR entirely (active)
+- **Parallel OCR**: Multiprocessing implementation exists but disabled (pool overhead issue)
 - **Batch scene classification**: Scene classifier processes all frames in one batch
 
 ## Tournament-Legal Stages (Hazards Off)
