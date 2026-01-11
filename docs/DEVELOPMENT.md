@@ -2,11 +2,70 @@
 
 This document chronicles the development process for RunItBack, including methods tried, what worked, what didn't, and the current state of the codebase.
 
-**Last Updated:** January 6, 2026
+**Last Updated:** January 11, 2026
 
 ---
 
 ## Changelog
+
+### January 11, 2026 - Stock Loss Detection Investigation
+
+**Session Goal:** Investigate and improve stock loss detection accuracy
+
+**Problem:**
+- Stock loss detection accuracy varied widely across videos (52-100% recall)
+- Steve vs Palutena video had worst performance (52% recall, 16 false positives)
+- Player attribution errors: deaths detected at correct time but wrong player
+
+**Investigation Findings:**
+
+**Test Results Across Videos:**
+| Video | Recall | Notes |
+|-------|--------|-------|
+| Ken vs King Dedede | 100% (8/8) | Best performance |
+| Ken vs Sonic | 85% (11/13) | Good |
+| Dark Pit vs Ken | 78% (14/18) | OK |
+| Steve vs Palutena | 52% (12/23) | Poor - Steve's effects cause OCR issues |
+| Cloud vs Pit | 93% (13/14) | Good |
+| Mario vs Ness | 69% (9/13) | OK |
+
+**Root Causes Identified:**
+
+1. **OCR Unreliability with Visual Effects**
+   - Steve's mining blocks and particles cause OCR misreads (e.g., 13% read as 113%)
+   - Damage tracking accumulates errors over time
+   - `p2_recent_max_damage` carries over old values incorrectly
+
+2. **`both_reset` Bug**
+   - When both players are at 0% (one from earlier death, one from new death), `both_reset` blocks detection
+   - Stock loss for the newly-dead player is missed
+   - Tracking variables not reset correctly after detection
+
+3. **Player Attribution Errors**
+   - Deaths detected at correct timestamps but attributed to wrong player
+   - Pattern: P1 expected → P2 detected (or vice versa)
+   - Caused by accumulated OCR errors in max damage tracking
+
+**Decision:**
+
+Rather than adding more complexity to the OCR-based detection (which was becoming a tangle of edge cases), decided to focus on **improving the scene classifier** via more labeled training data.
+
+**Rationale:**
+- Scene classifier's `respawning` detection is a simpler, more reliable signal
+- Once model accuracy improves, respawn detection becomes primary stock loss signal
+- Reduces reliance on fragile OCR-based heuristics
+- More labeled data → better model → cleaner detection logic
+
+**Action Items:**
+1. Revert complex stock loss detection changes
+2. Create more labeled training data using `tools/scene_labeler.py`
+3. Retrain scene classifier with additional data
+4. Shift to respawn-based detection as primary method
+
+**Files Modified:**
+- None (reverted all changes)
+
+---
 
 ### January 6, 2026 - Performance Optimizations & Scene Classification
 

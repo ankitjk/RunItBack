@@ -21,6 +21,15 @@ RunItBack is a Python CLI tool that analyzes Super Smash Bros. Ultimate (SSBU) r
 
 ### Known Issues (from test suite)
 - ❌ Stage detection returns "unknown" for all stages (needs implementation)
+- ⚠️ Stock loss detection has ~52-74% recall depending on video (OCR reliability issues)
+
+### Improvement Path
+The main bottleneck for stock loss accuracy is the scene classifier's respawn detection. More labeled training data will improve:
+1. **Respawn detection** - Primary signal for stock losses
+2. **Scene state accuracy** - Better neutral/advantage/disadvantage classification
+3. **Edge case handling** - Reduce reliance on complex OCR-based heuristics
+
+Use `tools/scene_labeler.py` to label more videos, then retrain with `tools/train_scene_classifier.py`.
 
 ### Detection Approach
 - **Damage Tracking**: PaddleOCR reads damage percentages every 0.5s
@@ -175,7 +184,8 @@ Skills are defined in `.claude/skills/`.
 
 ## Known Limitations
 
-1. **OCR Accuracy**: Damage reading can have errors during visual effects or motion blur
-2. **Stock Loss Detection**: Relies on damage reset pattern; may miss edge cases
+1. **OCR Accuracy**: Damage reading can have errors during visual effects or motion blur (especially Steve's mining effects)
+2. **Stock Loss Detection**: Relies on damage reset pattern; may miss edge cases. Respawn-based detection via scene classifier needs more training data
 3. **Stage Detection**: Battlefield vs Small Battlefield disambiguation can be unreliable
 4. **No Edgeguard/Ledgetrap Detection**: Requires character position tracking (future work)
+5. **Player Attribution**: In some cases, stock losses are attributed to the wrong player due to OCR timing issues
