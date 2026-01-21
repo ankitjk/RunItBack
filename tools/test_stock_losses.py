@@ -8,8 +8,11 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Set Gemini API key
-os.environ["GEMINI_API_KEY"] = "AIzaSyCcaIbIFQffymC1kh9ovsAs75dURRBrxMs"
+# Gemini API key must be set in environment
+if "GEMINI_API_KEY" not in os.environ:
+    print("Warning: GEMINI_API_KEY not set. Some detection features may be limited.")
+    print("Set it with: export GEMINI_API_KEY='your-key'")
+    print()
 
 from dataclasses import dataclass
 from typing import Optional
