@@ -28,13 +28,14 @@ import cv2
 import numpy as np
 
 from runitback.classification.states import (
+    DisadvantageType,
     FrameState,
     GameState,
     GameStateAnalysis,
     StateSegment,
     StockLoss,
 )
-from runitback.cv.ocr import read_damage_percentage
+from runitback.cv.ocr import read_damage_percentage, read_damage_batch_parallel
 from runitback.cv.ui_detector import get_roi, P1_DAMAGE_ROI, P2_DAMAGE_ROI, detect_stock_counts
 
 logger = logging.getLogger(__name__)
@@ -66,13 +67,17 @@ class GameStateDetector:
         use_gemini_stock_detection: bool = False,
         use_smart_gemini: bool = True,
         gemini_api_key: Optional[str] = None,
+        use_scene_classification: bool = True,
+        use_parallel_ocr: bool = False,  # Disabled by default - pool creation overhead
+        ocr_workers: int = 4,
     ):
         """Initialize the detector.
 
         Args:
             player_perspective: Which player to analyze (1 or 2)
             hit_threshold: Minimum damage increase to count as a hit
-            neutral_reset_time: Seconds without damage to return to neutral
+            neutral_reset_time: Seconds without damage to return to neutral.
+                Used as fallback when scene classification is unavailable.
             use_gemini_stock_detection: Enable FULL Gemini detection (check every frame).
                 More accurate but highest cost (~$0.0001 per frame).
             use_smart_gemini: Enable SMART Gemini detection (default True).
@@ -82,6 +87,12 @@ class GameStateDetector:
                 Cost: ~$0.0001 per uncertain frame (typically 1-5 per game).
             gemini_api_key: Gemini API key. If not provided, uses GEMINI_API_KEY
                 environment variable.
+            use_scene_classification: Enable ML-based scene classification for
+                position-based neutral reset. When both players are grounded,
+                returns to neutral immediately instead of waiting for timeout.
+            use_parallel_ocr: Enable parallel OCR processing for faster damage
+                reading. Uses multiprocessing to distribute OCR across workers.
+            ocr_workers: Number of parallel OCR workers (default 4).
         """
         self.player_perspective = player_perspective
         self.hit_threshold = hit_threshold
@@ -89,6 +100,24 @@ class GameStateDetector:
         self.use_gemini_stock_detection = use_gemini_stock_detection
         self.use_smart_gemini = use_smart_gemini
         self.gemini_api_key = gemini_api_key or os.environ.get("GEMINI_API_KEY")
+        self.use_scene_classification = use_scene_classification
+        self.use_parallel_ocr = use_parallel_ocr
+        self.ocr_workers = ocr_workers
+
+        # Import scene classifier if enabled
+        self._scene_classifier = None
+        if self.use_scene_classification:
+            try:
+                from runitback.cv.scene_classifier import SceneClassifier
+                self._scene_classifier = SceneClassifier()
+                if self._scene_classifier.available:
+                    logger.info("Scene classification enabled for position-based neutral reset")
+                else:
+                    logger.warning("Scene classifier model not available, falling back to time-based reset")
+                    self._scene_classifier = None
+            except ImportError as e:
+                logger.warning(f"Could not import SceneClassifier: {e}")
+                self._scene_classifier = None
 
         # Import stock counter detector if any Gemini mode is enabled
         self._stock_counter_tracker = None
@@ -165,45 +194,124 @@ class GameStateDetector:
             frame_states=frame_states,
         )
 
+    def _is_within_game_bounds(self, timestamp: float) -> bool:
+        """Check if a timestamp falls within any game's boundaries.
+
+        Args:
+            timestamp: The timestamp to check
+
+        Returns:
+            True if within game bounds, False if outside (or no bounds defined)
+        """
+        if not self._game_start_times or not self._game_end_times:
+            # No bounds defined - consider all frames as within bounds
+            return True
+
+        # Check if timestamp is within any game interval
+        for start, end in zip(self._game_start_times, self._game_end_times):
+            if start <= timestamp <= end:
+                return True
+        return False
+
     def _extract_frame_states(self, frames: list) -> list[FrameState]:
-        """Extract damage percentages and stock information from frames.
+        """Extract damage percentages, stock information, and scene state from frames.
+
+        Uses parallel OCR when enabled and skips frames outside game boundaries
+        for performance optimization.
 
         Args:
             frames: List of Frame objects
 
         Returns:
-            List of FrameState with damage values and stock counts
+            List of FrameState with damage values, stock counts, and scene state
         """
         frame_states: list[FrameState] = []
         prev_p1_damage: Optional[float] = None
         prev_p2_damage: Optional[float] = None
 
+        # Batch scene classification for efficiency
+        scene_states = []
+        if self._scene_classifier:
+            images = [f.image for f in frames]
+            classifications = self._scene_classifier.classify_batch(images)
+            scene_states = [c.state.value for c in classifications]
+            logger.info(f"Classified {len(scene_states)} frames with scene classifier")
+
+        # Option 1: Identify which frames are within game boundaries
+        # Skip OCR for frames outside game bounds to save processing time
+        frames_to_ocr: list[tuple[int, np.ndarray, np.ndarray]] = []  # (index, p1_roi, p2_roi)
+        frames_outside_bounds = 0
+
         for i, frame in enumerate(frames):
-            # Extract damage ROIs
-            p1_roi = get_roi(frame.image, P1_DAMAGE_ROI)
-            p2_roi = get_roi(frame.image, P2_DAMAGE_ROI)
+            if self._is_within_game_bounds(frame.timestamp):
+                p1_roi = get_roi(frame.image, P1_DAMAGE_ROI)
+                p2_roi = get_roi(frame.image, P2_DAMAGE_ROI)
+                frames_to_ocr.append((i, p1_roi, p2_roi))
+            else:
+                frames_outside_bounds += 1
 
-            # Read damage percentages
-            p1_damage, p1_conf = read_damage_percentage(p1_roi)
-            p2_damage, p2_conf = read_damage_percentage(p2_roi)
+        if frames_outside_bounds > 0:
+            logger.info(f"Skipping OCR for {frames_outside_bounds} frames outside game boundaries")
 
-            # Detect stock counts from HUD stock icons
-            p1_stocks, p2_stocks = detect_stock_counts(frame.image)
+        # Option 5: Process OCR in parallel if enabled and we have enough frames
+        ocr_results: dict[int, tuple[Optional[float], float, Optional[float], float]] = {}
 
-            # Log damage readings periodically for debugging
-            if i % 20 == 0:  # Every 10 seconds at 0.5s intervals
-                logger.debug(
-                    f"Frame {i} ({frame.timestamp:.1f}s): "
-                    f"P1={p1_damage}% (conf={p1_conf:.2f}), "
-                    f"P2={p2_damage}% (conf={p2_conf:.2f})"
-                )
+        if self.use_parallel_ocr and len(frames_to_ocr) >= 4:
+            # Collect all ROIs for parallel processing
+            p1_rois = [roi[1] for roi in frames_to_ocr]
+            p2_rois = [roi[2] for roi in frames_to_ocr]
 
-            # Log stock counts periodically for debugging
-            if i % 20 == 0:
-                logger.debug(
-                    f"Frame {i} ({frame.timestamp:.1f}s): "
-                    f"Stock counts: P1={p1_stocks}, P2={p2_stocks}"
-                )
+            logger.info(f"Processing {len(frames_to_ocr)} frames with parallel OCR ({self.ocr_workers} workers)")
+
+            # Process P1 and P2 damage ROIs in parallel batches
+            p1_results = read_damage_batch_parallel(p1_rois, num_workers=self.ocr_workers)
+            p2_results = read_damage_batch_parallel(p2_rois, num_workers=self.ocr_workers)
+
+            # Map results back to frame indices
+            for idx, (frame_idx, _, _) in enumerate(frames_to_ocr):
+                p1_damage, p1_conf = p1_results[idx]
+                p2_damage, p2_conf = p2_results[idx]
+                ocr_results[frame_idx] = (p1_damage, p1_conf, p2_damage, p2_conf)
+        else:
+            # Sequential OCR processing (for small batches or when parallel is disabled)
+            for frame_idx, p1_roi, p2_roi in frames_to_ocr:
+                p1_damage, p1_conf = read_damage_percentage(p1_roi)
+                p2_damage, p2_conf = read_damage_percentage(p2_roi)
+                ocr_results[frame_idx] = (p1_damage, p1_conf, p2_damage, p2_conf)
+
+        # Build frame states from results
+        for i, frame in enumerate(frames):
+            # Get scene state if available
+            scene_state = scene_states[i] if scene_states else None
+
+            # Get OCR results if this frame was processed
+            if i in ocr_results:
+                p1_damage, p1_conf, p2_damage, p2_conf = ocr_results[i]
+
+                # Detect stock counts from HUD stock icons
+                p1_stocks, p2_stocks = detect_stock_counts(frame.image)
+
+                # Log damage readings periodically for debugging
+                if i % 20 == 0:  # Every 10 seconds at 0.5s intervals
+                    logger.debug(
+                        f"Frame {i} ({frame.timestamp:.1f}s): "
+                        f"P1={p1_damage}% (conf={p1_conf:.2f}), "
+                        f"P2={p2_damage}% (conf={p2_conf:.2f}), "
+                        f"scene={scene_state}"
+                    )
+
+                # Log stock counts periodically for debugging
+                if i % 20 == 0:
+                    logger.debug(
+                        f"Frame {i} ({frame.timestamp:.1f}s): "
+                        f"Stock counts: P1={p1_stocks}, P2={p2_stocks}"
+                    )
+            else:
+                # Frame outside game bounds - no OCR performed
+                p1_damage = None
+                p2_damage = None
+                p1_stocks = None
+                p2_stocks = None
 
             # Use previous value as fallback if OCR fails
             if p1_damage is None and prev_p1_damage is not None:
@@ -227,6 +335,7 @@ class GameStateDetector:
                     p1_visible=p1_visible,
                     p2_visible=p2_visible,
                     state=GameState.UNKNOWN,
+                    scene_state=scene_state,
                 )
             )
 
@@ -280,9 +389,19 @@ class GameStateDetector:
         MIN_KILL_DAMAGE = 50  # Minimum damage before stock loss is plausible (filters OCR noise)
         LOW_PERCENT_KILL_THRESHOLD = 15  # Damage drop to 0 from this range triggers smart Gemini
 
+        # Track respawn detection for proactive stock loss detection
+        # When scene classifier detects 'respawning', it's a strong signal of stock loss
+        # even if OCR didn't catch the damage reset properly
+        p1_in_respawn = False
+        p2_in_respawn = False
+        p1_damage_before_respawn: Optional[float] = None
+        p2_damage_before_respawn: Optional[float] = None
+        MIN_RESPAWN_KILL_DAMAGE = 0  # No minimum - respawn detection is reliable visual signal
+
         # Track uncertain situations for smart Gemini
         # These are frame indices where we'll later check with Gemini
         uncertain_low_percent_kills: list[int] = []  # Frame indices with possible low-percent kills
+        uncertain_respawn_frames: list[int] = []  # Frames where respawn seen but no stock loss attributed
 
         # Track maximum damage seen to handle OCR noise
         # This prevents losing track of high damage when OCR has intermediate errors
@@ -295,6 +414,9 @@ class GameStateDetector:
         consecutive_none_frames = 0
         GAME_TRANSITION_THRESHOLD = 10  # 5 seconds of None damage = game transition
         in_game_transition = False  # Track if we're in a transition period
+
+        # Max stocks per player per game (enforced in _enforce_stock_loss_limit)
+        MAX_STOCKS_PER_PLAYER = 3
 
         # Build frame lookup for Gemini detection
         frame_by_index = {}
@@ -403,15 +525,17 @@ class GameStateDetector:
             # P1 stock loss: confirm only after consecutive low damage frames
             # and only if damage was high enough before the low streak
             # MIN_KILL_DAMAGE filters OCR noise (e.g., 62% misread as 3%)
+            # Note: We detect ALL potential stock losses here and filter to max 3 per game later
+            # This ensures we keep the most confident detections, not just the first 3
             if (p1_low_damage_frames == CONFIRM_FRAMES and
                 p1_high_damage_before_low is not None and
                 p1_high_damage_before_low >= MIN_KILL_DAMAGE and cooldown_p1_ok and
-                not both_reset):  # Skip if both players reset (game transition)
+                not both_reset):
                 p1_stock_loss = True
                 last_p1_stock_loss_time = fs.timestamp
                 # Reset recent max after stock loss (player starts fresh)
                 p1_recent_max_damage = 0.0
-                logger.debug(f"P1 stock loss confirmed (damage reset): {p1_high_damage_before_low:.0f}% -> low at {fs.timestamp:.1f}s")
+                logger.debug(f"P1 stock loss detected (damage reset): {p1_high_damage_before_low:.0f}% -> low at {fs.timestamp:.1f}s")
             # SMART GEMINI: Check for low-percent kills (damage dropped but was below MIN_KILL_DAMAGE)
             elif (p1_low_damage_frames == CONFIRM_FRAMES and
                   p1_high_damage_before_low is not None and
@@ -426,12 +550,12 @@ class GameStateDetector:
             if (p2_low_damage_frames == CONFIRM_FRAMES and
                 p2_high_damage_before_low is not None and
                 p2_high_damage_before_low >= MIN_KILL_DAMAGE and cooldown_p2_ok and
-                not both_reset):  # Skip if both players reset (game transition)
+                not both_reset):
                 p2_stock_loss = True
                 last_p2_stock_loss_time = fs.timestamp
                 # Reset recent max after stock loss (player starts fresh)
                 p2_recent_max_damage = 0.0
-                logger.debug(f"P2 stock loss confirmed (damage reset): {p2_high_damage_before_low:.0f}% -> low at {fs.timestamp:.1f}s")
+                logger.debug(f"P2 stock loss detected (damage reset): {p2_high_damage_before_low:.0f}% -> low at {fs.timestamp:.1f}s")
             # SMART GEMINI: Check for low-percent kills (damage dropped but was below MIN_KILL_DAMAGE)
             elif (p2_low_damage_frames == CONFIRM_FRAMES and
                   p2_high_damage_before_low is not None and
@@ -444,6 +568,88 @@ class GameStateDetector:
             # If both reset at same time, log it as game transition
             if both_reset and p1_low_damage_frames == CONFIRM_FRAMES:
                 logger.debug(f"Game transition detected at {fs.timestamp:.1f}s (both players reset to 0%)")
+
+            # RESPAWN-BASED STOCK LOSS DETECTION
+            # The scene classifier detecting 'respawning' is a strong signal of stock loss
+            # This catches cases where OCR misreads damage during death animation
+            # (e.g., reads 50% instead of 0% during the kill explosion)
+            # Note: Both players CAN respawn at the same time (trade kills)
+            # Note: 0% kills (gimps, stage spikes) won't be caught here - requires Gemini
+            if fs.scene_state == "respawning":
+                # Player is on respawn platform - record damage at respawn start
+                # We track both players and use damage drop to determine who died
+
+                # Check P1 respawn
+                if not p1_in_respawn and cooldown_p1_ok and not p1_stock_loss:
+                    p1_in_respawn = True
+                    p1_damage_before_respawn = p1_recent_max_damage
+
+                # Check P2 respawn
+                if not p2_in_respawn and cooldown_p2_ok and not p2_stock_loss:
+                    p2_in_respawn = True
+                    p2_damage_before_respawn = p2_recent_max_damage
+            else:
+                # Not in respawn state - check if we just exited a respawn
+                # Use damage drop to determine which player(s) lost a stock
+                # Both can lose stocks on trades
+
+                current_p1_damage = fs.p1_damage if fs.p1_damage is not None else 0
+                current_p2_damage = fs.p2_damage if fs.p2_damage is not None else 0
+
+                # Calculate damage drops - a real stock loss shows significant drop
+                p1_drop = (p1_damage_before_respawn or 0) - current_p1_damage
+                p2_drop = (p2_damage_before_respawn or 0) - current_p2_damage
+
+                # Require meaningful damage drop to filter false positives
+                # This won't catch 0% kills but handles 99%+ of cases
+                MIN_DAMAGE_DROP = 20
+
+                # P1 respawn check
+                if p1_in_respawn and cooldown_p1_ok and not p1_stock_loss:
+                    p1_lost_stock = (p1_damage_before_respawn is not None and
+                                    current_p1_damage < 20 and
+                                    p1_drop >= MIN_DAMAGE_DROP)
+
+                    if p1_lost_stock:
+                        p1_stock_loss = True
+                        last_p1_stock_loss_time = fs.timestamp
+                        p1_recent_max_damage = 0.0
+                        logger.debug(
+                            f"P1 stock loss detected (respawn): {p1_damage_before_respawn:.0f}% -> "
+                            f"{current_p1_damage:.0f}% at {fs.timestamp:.1f}s (drop={p1_drop:.0f}%)"
+                        )
+
+                p1_in_respawn = False
+                p1_damage_before_respawn = None
+
+                # P2 respawn check
+                if p2_in_respawn and cooldown_p2_ok and not p2_stock_loss:
+                    p2_lost_stock = (p2_damage_before_respawn is not None and
+                                    current_p2_damage < 20 and
+                                    p2_drop >= MIN_DAMAGE_DROP)
+
+                    if p2_lost_stock:
+                        p2_stock_loss = True
+                        last_p2_stock_loss_time = fs.timestamp
+                        p2_recent_max_damage = 0.0
+                        logger.debug(
+                            f"P2 stock loss detected (respawn): {p2_damage_before_respawn:.0f}% -> "
+                            f"{current_p2_damage:.0f}% at {fs.timestamp:.1f}s (drop={p2_drop:.0f}%)"
+                        )
+
+                # SMART GEMINI: If respawn was detected but no stock loss attributed,
+                # mark for Gemini check (catches 0% kills, gimps, etc.)
+                saw_respawn = p1_in_respawn or p2_in_respawn
+                if saw_respawn and not p1_stock_loss and not p2_stock_loss:
+                    uncertain_respawn_frames.append(fs.frame_index)
+                    logger.debug(
+                        f"Uncertain respawn at {fs.timestamp:.1f}s - no stock loss attributed "
+                        f"(P1: {p1_damage_before_respawn}% -> {current_p1_damage}%, "
+                        f"P2: {p2_damage_before_respawn}% -> {current_p2_damage}%)"
+                    )
+
+                p2_in_respawn = False
+                p2_damage_before_respawn = None
 
             # GEMINI STOCK COUNTER DETECTION
             # Use Gemini to detect stock counter splash for additional accuracy
@@ -466,6 +672,7 @@ class GameStateDetector:
                 )
 
                 # Use Gemini detection if it found a stock loss
+                # Note: We detect ALL stock losses here and filter to max 3 per game later
                 if gemini_p1_lost and cooldown_p1_ok:
                     if not p1_stock_loss:
                         logger.info(
@@ -509,11 +716,29 @@ class GameStateDetector:
             fs.p1_stock_loss = p1_stock_loss
             fs.p2_stock_loss = p2_stock_loss
 
-            # Stock loss resets game state to neutral
+            # Stock loss handling:
+            # The stock loss is the RESULT of disadvantage (getting combo'd/edgeguarded)
+            # So the frame where the stock was lost should remain in advantage/disadvantage
+            # Then we transition to neutral for the NEXT frame (respawn)
             if p1_stock_loss or p2_stock_loss:
+                # Determine whose advantage/disadvantage this was based on who lost the stock
+                if p1_stock_loss:
+                    # P1 lost stock = P1 was in disadvantage (opponent took the stock)
+                    if self.player_perspective == 1:
+                        fs.state = GameState.DISADVANTAGE
+                    else:
+                        fs.state = GameState.ADVANTAGE
+                elif p2_stock_loss:
+                    # P2 lost stock = P2 was in disadvantage (player 1 took the stock)
+                    if self.player_perspective == 1:
+                        fs.state = GameState.ADVANTAGE
+                    else:
+                        fs.state = GameState.DISADVANTAGE
+
+                # Reset to neutral for the NEXT iteration (respawn state)
                 current_state = GameState.NEUTRAL
                 last_hit_time = None
-                fs.state = current_state
+
                 # Update previous damage values
                 if fs.p1_damage is not None:
                     prev_p1_damage = fs.p1_damage
@@ -524,6 +749,9 @@ class GameStateDetector:
             # Determine who got hit
             p1_got_hit = p1_delta >= self.hit_threshold
             p2_got_hit = p2_delta >= self.hit_threshold
+
+            # Determine disadvantage type from scene state
+            disadvantage_type = self._get_disadvantage_type(fs.scene_state)
 
             # State transition logic
             if p1_got_hit and p2_got_hit:
@@ -549,19 +777,23 @@ class GameStateDetector:
                 # No significant damage this frame
                 # Check if we should return to neutral
                 if current_state != GameState.NEUTRAL and last_hit_time is not None:
-                    time_since_hit = fs.timestamp - last_hit_time
-                    # Return to neutral if:
-                    # 1. Enough time has passed
-                    # 2. Both players are visible (on stage)
-                    if (
-                        time_since_hit >= self.neutral_reset_time
-                        and fs.p1_visible
-                        and fs.p2_visible
-                    ):
+                    # Position-based reset: both_grounded = return to neutral immediately
+                    if fs.scene_state == "both_grounded":
                         current_state = GameState.NEUTRAL
                         last_hit_time = None
+                    else:
+                        # Fallback: time-based reset when scene classification unavailable
+                        time_since_hit = fs.timestamp - last_hit_time
+                        if (
+                            time_since_hit >= self.neutral_reset_time
+                            and fs.p1_visible
+                            and fs.p2_visible
+                        ):
+                            current_state = GameState.NEUTRAL
+                            last_hit_time = None
 
             fs.state = current_state
+            fs.disadvantage_type = disadvantage_type if current_state != GameState.NEUTRAL else DisadvantageType.UNKNOWN
 
             # Update previous damage values
             if fs.p1_damage is not None:
@@ -573,8 +805,12 @@ class GameStateDetector:
         # Check uncertain situations with Gemini Vision API
         if self.use_smart_gemini and self._stock_counter_tracker and frames:
             self._smart_gemini_postprocess(
-                frame_states, frames, uncertain_low_percent_kills
+                frame_states, frames, uncertain_low_percent_kills, uncertain_respawn_frames
             )
+
+        # FINAL VALIDATION: Enforce max 3 stock losses per player per game
+        # This catches any excess stock losses added by Smart Gemini postprocessing
+        self._enforce_stock_loss_limit(frame_states, MAX_STOCKS_PER_PLAYER)
 
     def _is_near_game_start(self, timestamp: float, cooldown: float = 5.0) -> bool:
         """Check if timestamp is within cooldown period after a game start.
@@ -595,23 +831,252 @@ class GameStateDetector:
                 return True
         return False
 
+    def _get_current_game_index(self, timestamp: float) -> int:
+        """Get the game index (0-based) for a given timestamp.
+
+        Args:
+            timestamp: The timestamp to check
+
+        Returns:
+            Game index (0, 1, 2, etc.) or -1 if not within any game
+        """
+        if not self._game_start_times or not self._game_end_times:
+            # No game boundaries - treat as single game (index 0)
+            return 0
+
+        for i, (start, end) in enumerate(zip(self._game_start_times, self._game_end_times)):
+            if start <= timestamp <= end:
+                return i
+        return -1
+
+    def _verify_stock_loss_with_respawn(
+        self, frame_states: list[FrameState], loss_timestamp: float, game_end_time: float
+    ) -> bool:
+        """Verify a stock loss by checking for respawn detection nearby.
+
+        After a real stock loss, the player respawns on the invincibility platform.
+        The scene classifier should detect 'respawning' within a window around
+        the stock loss detection time.
+
+        Note: Due to timing differences between damage-reset detection and
+        visual respawn, we check a window from 2s before to 5s after the
+        stock loss timestamp.
+
+        For game-ending stock losses (near game end), we skip this check since
+        there's no respawn after the final stock.
+
+        Args:
+            frame_states: List of FrameState with scene classifications
+            loss_timestamp: Timestamp of the detected stock loss
+            game_end_time: End time of the current game
+
+        Returns:
+            True if the stock loss is verified (respawn found or game-ending)
+        """
+        # If this is near the end of the game (within 6s), it's likely the game-ending stock
+        # Don't require respawn verification for game-ending kills
+        # Using 6s to account for timing variations and edge cases (5s was too tight)
+        if game_end_time - loss_timestamp <= 6.0:
+            logger.debug(f"Stock loss at {loss_timestamp:.1f}s is near game end - skipping respawn check")
+            return True
+
+        # Look for respawning scene state in a window around the stock loss
+        # The window extends from 2s before (damage-reset can lag behind visual)
+        # to 5s after (respawn happens after death animation)
+        WINDOW_BEFORE = 2.0
+        WINDOW_AFTER = 5.0
+
+        for fs in frame_states:
+            if fs.timestamp < loss_timestamp - WINDOW_BEFORE:
+                continue
+            if fs.timestamp > loss_timestamp + WINDOW_AFTER:
+                break
+
+            # Check if scene state indicates respawning
+            if fs.scene_state == "respawning":
+                logger.debug(f"Stock loss at {loss_timestamp:.1f}s verified by respawn at {fs.timestamp:.1f}s")
+                return True
+
+        # No respawn detected - this may be a false positive
+        logger.debug(f"Stock loss at {loss_timestamp:.1f}s NOT verified (no respawn within window)")
+        return False
+
+    def _enforce_stock_loss_limit(
+        self, frame_states: list[FrameState], max_stocks: int = 3
+    ) -> None:
+        """Enforce maximum stock losses per player per game.
+
+        When more than max_stocks losses are detected for a player in a game,
+        uses respawn verification to identify false positives. Stock losses
+        without a subsequent respawn detection are removed first. If still
+        over the limit, keeps the first max_stocks chronologically.
+
+        Args:
+            frame_states: List of FrameState to validate (modified in place)
+            max_stocks: Maximum stock losses allowed per player per game
+        """
+        # Build index for quick lookups
+        fs_by_idx = {fs.frame_index: fs for fs in frame_states}
+
+        # Collect all stock losses per game (chronologically ordered since frame_states is ordered)
+        losses_by_game: dict[int, dict[str, list[tuple[int, float]]]] = {}
+        # Structure: {game_idx: {'p1': [(frame_idx, timestamp), ...], 'p2': [...]}}
+
+        for fs in frame_states:
+            game_idx = self._get_current_game_index(fs.timestamp)
+            if game_idx < 0:
+                continue  # Skip frames outside game bounds
+
+            if game_idx not in losses_by_game:
+                losses_by_game[game_idx] = {'p1': [], 'p2': []}
+
+            if fs.p1_stock_loss:
+                losses_by_game[game_idx]['p1'].append((fs.frame_index, fs.timestamp))
+
+            if fs.p2_stock_loss:
+                losses_by_game[game_idx]['p2'].append((fs.frame_index, fs.timestamp))
+
+        # For each game, verify stock losses and remove false positives
+        for game_idx, player_losses in losses_by_game.items():
+            # Get game end time for this game
+            game_end_time = float('inf')
+            if self._game_end_times and game_idx < len(self._game_end_times):
+                game_end_time = self._game_end_times[game_idx]
+
+            for player_key in ['p1', 'p2']:
+                losses = player_losses[player_key]
+                if len(losses) <= max_stocks:
+                    continue  # No filtering needed
+
+                # Log warning - detecting more than max stocks indicates potential issues
+                timestamps = [f"{ts:.1f}s" for _, ts in losses]
+                logger.warning(
+                    f"Game {game_idx + 1} {player_key.upper()}: detected {len(losses)} stock losses "
+                    f"(max is {max_stocks}). Timestamps: {timestamps}. "
+                    f"Using respawn verification to identify false positives."
+                )
+
+                # Verify each stock loss using respawn detection
+                verified_losses = []
+                unverified_losses = []
+
+                for frame_idx, timestamp in losses:
+                    if self._verify_stock_loss_with_respawn(frame_states, timestamp, game_end_time):
+                        verified_losses.append((frame_idx, timestamp))
+                    else:
+                        unverified_losses.append((frame_idx, timestamp))
+
+                # Remove unverified losses first (likely false positives)
+                for frame_idx, timestamp in unverified_losses:
+                    fs = fs_by_idx.get(frame_idx)
+                    if fs:
+                        if player_key == 'p1':
+                            fs.p1_stock_loss = False
+                        else:
+                            fs.p2_stock_loss = False
+                        logger.info(
+                            f"Removed {player_key.upper()} stock loss at {timestamp:.1f}s "
+                            f"(no respawn detected - likely false positive)"
+                        )
+
+                # If still over limit after removing unverified, keep first max_stocks of verified
+                if len(verified_losses) > max_stocks:
+                    logger.warning(
+                        f"Game {game_idx + 1} {player_key.upper()}: still have {len(verified_losses)} "
+                        f"verified stock losses (max is {max_stocks}). Keeping first {max_stocks}."
+                    )
+                    to_keep = set(frame_idx for frame_idx, _ in verified_losses[:max_stocks])
+                    for frame_idx, timestamp in verified_losses:
+                        if frame_idx not in to_keep:
+                            fs = fs_by_idx.get(frame_idx)
+                            if fs:
+                                if player_key == 'p1':
+                                    fs.p1_stock_loss = False
+                                else:
+                                    fs.p2_stock_loss = False
+                                logger.debug(
+                                    f"Removed excess {player_key.upper()} stock loss at {timestamp:.1f}s "
+                                    f"(game {game_idx + 1}, keeping first {max_stocks})"
+                                )
+
+        # Log final stock loss counts
+        final_counts: dict[int, dict[str, int]] = {}
+        for fs in frame_states:
+            game_idx = self._get_current_game_index(fs.timestamp)
+            if game_idx < 0:
+                continue
+            if game_idx not in final_counts:
+                final_counts[game_idx] = {'p1': 0, 'p2': 0}
+            if fs.p1_stock_loss:
+                final_counts[game_idx]['p1'] += 1
+            if fs.p2_stock_loss:
+                final_counts[game_idx]['p2'] += 1
+
+        for game_idx, counts in sorted(final_counts.items()):
+            logger.debug(
+                f"Game {game_idx + 1} final stock losses: P1={counts['p1']}, P2={counts['p2']}"
+            )
+
+    def _get_disadvantage_type(self, scene_state: Optional[str]) -> DisadvantageType:
+        """Map scene state to disadvantage type.
+
+        Args:
+            scene_state: Scene classification result (string value of SceneState)
+
+        Returns:
+            DisadvantageType based on scene classification
+        """
+        if scene_state is None:
+            return DisadvantageType.UNKNOWN
+
+        # Map scene states to disadvantage types
+        # Note: We can't determine WHO is in disadvantage from scene alone
+        # That's determined by damage tracking (who took the hit)
+        scene_to_disadvantage = {
+            # Juggle situations
+            "one_airborne": DisadvantageType.JUGGLE,
+            "both_airborne": DisadvantageType.JUGGLE,
+            # Offstage/edgeguard situations
+            "one_offstage": DisadvantageType.OFFSTAGE,
+            "both_offstage": DisadvantageType.OFFSTAGE,
+            # Ledgetrap situations
+            "one_on_ledge": DisadvantageType.LEDGETRAP,
+            "both_on_ledge": DisadvantageType.LEDGETRAP,
+            # Tech chase situations
+            "one_knocked_down": DisadvantageType.TECH_CHASE,
+            "both_knocked_down": DisadvantageType.TECH_CHASE,
+            # Respawning
+            "respawning": DisadvantageType.RESPAWNING,
+            # Neutral (shouldn't reach here in disadvantage)
+            "both_grounded": DisadvantageType.UNKNOWN,
+            "non_gameplay": DisadvantageType.UNKNOWN,
+        }
+
+        return scene_to_disadvantage.get(scene_state, DisadvantageType.UNKNOWN)
+
     def _smart_gemini_postprocess(
         self,
         frame_states: list[FrameState],
         frames: list,
         uncertain_low_percent_kills: list,
+        uncertain_respawn_frames: list[int] = None,
     ) -> None:
         """Post-process with Gemini for uncertain stock loss situations.
 
         Uses Gemini Vision API selectively for:
         1. Low-percent kills that damage-reset missed (below 50% threshold)
-        2. GAME! screens at the end of each game (final stock has no damage reset)
+        2. Uncertain respawns where no stock loss was attributed (0% kills, gimps)
+        3. GAME! screens at the end of each game (final stock has no damage reset)
 
         Args:
             frame_states: List of FrameState to update
             frames: List of Frame objects with images
             uncertain_low_percent_kills: List of (frame_index, player, damage) tuples
+            uncertain_respawn_frames: List of frame indices where respawn was seen
+                but no stock loss was attributed to either player
         """
+        if uncertain_respawn_frames is None:
+            uncertain_respawn_frames = []
         from runitback.cv.stock_counter_detector import detect_stock_counter_gemini
 
         # Build frame lookup
@@ -671,7 +1136,59 @@ class GameStateDetector:
             if not found_kill:
                 logger.debug(f"Smart Gemini did not confirm low-percent kill at frame {frame_idx}")
 
-        # 2. Detect GAME! screens - check frames near potential game endings
+        # 2. Check uncertain respawn frames (0% kills, gimps, etc.)
+        # These are respawns where we couldn't determine who lost based on damage
+        for frame_idx in uncertain_respawn_frames:
+            fs = fs_by_index.get(frame_idx)
+            if fs and self._is_near_game_start(fs.timestamp):
+                logger.debug(f"Skipping uncertain respawn at {fs.timestamp:.1f}s (near game start)")
+                continue
+
+            # Check frames around the respawn for stock counter splash
+            found_kill = False
+            for offset in range(-6, 6):  # -3s to +3s at 0.5s intervals
+                check_idx = frame_idx + offset
+                if check_idx not in frame_by_index:
+                    continue
+
+                frame = frame_by_index[check_idx]
+                detected, p1_stocks, p2_stocks, is_game_end = detect_stock_counter_gemini(
+                    frame.image, api_key=self.gemini_api_key
+                )
+                gemini_calls += 1
+
+                if detected or is_game_end:
+                    check_fs = fs_by_index.get(check_idx)
+                    if check_fs:
+                        if self._is_near_game_start(check_fs.timestamp):
+                            logger.debug(f"Skipping Gemini detection at {check_fs.timestamp:.1f}s (near game start)")
+                            continue
+
+                        # Determine who lost based on stock counts from Gemini
+                        # The player with fewer stocks is the one who just lost
+                        if p1_stocks is not None and p2_stocks is not None:
+                            if p1_stocks < p2_stocks or p1_stocks == 0:
+                                check_fs.p1_stock_loss = True
+                                logger.info(
+                                    f"Smart Gemini confirmed P1 0%/low-percent kill "
+                                    f"at {check_fs.timestamp:.1f}s (stocks: P1={p1_stocks}, P2={p2_stocks})"
+                                )
+                            else:
+                                check_fs.p2_stock_loss = True
+                                logger.info(
+                                    f"Smart Gemini confirmed P2 0%/low-percent kill "
+                                    f"at {check_fs.timestamp:.1f}s (stocks: P1={p1_stocks}, P2={p2_stocks})"
+                                )
+                        elif is_game_end:
+                            # GAME! screen but stock counts unclear - infer from damage
+                            self._infer_game_end_loser(frame_states, check_idx)
+                        found_kill = True
+                        break
+
+            if not found_kill:
+                logger.debug(f"Smart Gemini did not confirm uncertain respawn at frame {frame_idx}")
+
+        # 3. Detect GAME! screens - check frames near potential game endings
         # A game ends when total detected stock losses reach certain thresholds
         # For a 3-stock game: game ends when one player has lost 3 stocks total
         # We look for the GAME! screen in the frames following the last detected kill
@@ -876,6 +1393,27 @@ class GameStateDetector:
                 fs.p1_stock_loss = True
                 logger.warning(f"Smart Gemini couldn't determine GAME! loser at {fs.timestamp:.1f}s, defaulting to P1")
 
+    def _get_dominant_disadvantage_type(
+        self, frame_states: list[FrameState]
+    ) -> DisadvantageType:
+        """Get the most common disadvantage type in a set of frames.
+
+        Args:
+            frame_states: List of FrameState to analyze
+
+        Returns:
+            Most common DisadvantageType (excluding UNKNOWN if possible)
+        """
+        from collections import Counter
+
+        types = [fs.disadvantage_type for fs in frame_states if fs.disadvantage_type != DisadvantageType.UNKNOWN]
+        if not types:
+            return DisadvantageType.UNKNOWN
+
+        # Return most common type
+        counter = Counter(types)
+        return counter.most_common(1)[0][0]
+
     def _build_segments(self, frame_states: list[FrameState]) -> list[StateSegment]:
         """Build continuous segments from frame states.
 
@@ -898,9 +1436,9 @@ class GameStateDetector:
             if fs.state != current_state:
                 # State changed - close current segment
                 # Collect stock losses from frames in this segment
-                stock_losses = self._collect_stock_losses(
-                    frame_states[segment_start_idx:i]
-                )
+                segment_frames = frame_states[segment_start_idx:i]
+                stock_losses = self._collect_stock_losses(segment_frames)
+                disadvantage_type = self._get_dominant_disadvantage_type(segment_frames)
                 # End time is the PREVIOUS frame's timestamp (last frame in this segment)
                 segments.append(
                     StateSegment(
@@ -910,6 +1448,7 @@ class GameStateDetector:
                         start_frame=segment_start.frame_index,
                         end_frame=prev_fs.frame_index,
                         stock_losses=stock_losses,
+                        disadvantage_type=disadvantage_type,
                     )
                 )
                 current_state = fs.state
@@ -919,9 +1458,9 @@ class GameStateDetector:
 
         # Close final segment
         final_fs = frame_states[-1]
-        stock_losses = self._collect_stock_losses(
-            frame_states[segment_start_idx:]
-        )
+        segment_frames = frame_states[segment_start_idx:]
+        stock_losses = self._collect_stock_losses(segment_frames)
+        disadvantage_type = self._get_dominant_disadvantage_type(segment_frames)
         segments.append(
             StateSegment(
                 state=current_state,
@@ -930,17 +1469,24 @@ class GameStateDetector:
                 start_frame=segment_start.frame_index,
                 end_frame=final_fs.frame_index,
                 stock_losses=stock_losses,
+                disadvantage_type=disadvantage_type,
             )
         )
 
         # Filter out very short segments
         # - Short neutral segments (< 1s) between hits are likely noise
         # - Short advantage/disadvantage segments (< 1.5s) are often OCR jitter
+        # EXCEPTION: Segments with stock losses are NEVER filtered (they represent important events)
         MIN_NEUTRAL_DURATION = 1.0
         MIN_ADV_DISADV_DURATION = 1.5
         filtered_segments: list[StateSegment] = []
 
         for seg in segments:
+            # Never filter segments that contain stock losses - they're important events
+            if seg.stock_losses:
+                filtered_segments.append(seg)
+                continue
+
             if seg.state == GameState.NEUTRAL and seg.duration < MIN_NEUTRAL_DURATION:
                 # Skip very short neutral segments, but carry stock losses forward
                 if seg.stock_losses and filtered_segments:
@@ -1013,15 +1559,16 @@ class GameStateDetector:
                 clipped_start = max(seg.start_time, game_start)
                 clipped_end = min(seg.end_time, game_end)
 
-                # Skip if the clipped segment is too short
-                if clipped_end - clipped_start < 0.5:
-                    continue
-
                 # Filter stock losses to only those within the clipped bounds
                 clipped_stock_losses = [
                     sl for sl in seg.stock_losses
                     if clipped_start <= sl.timestamp <= clipped_end
                 ]
+
+                # Skip if the clipped segment is too short AND has no stock losses
+                # Segments with stock losses are always kept (they're important events)
+                if clipped_end - clipped_start < 0.5 and not clipped_stock_losses:
+                    continue
 
                 clipped_seg = StateSegment(
                     state=seg.state,

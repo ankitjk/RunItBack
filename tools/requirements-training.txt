@@ -1,0 +1,10 @@
+# Requirements for scene classifier training
+# Install with: pip install -r tools/requirements-training.txt
+
+torch>=2.0.0
+torchvision>=0.15.0
+onnx>=1.14.0
+onnxruntime>=1.15.0
+
+# For visualization (optional)
+matplotlib>=3.7.0

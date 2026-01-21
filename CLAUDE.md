@@ -21,10 +21,21 @@ RunItBack is a Python CLI tool that analyzes Super Smash Bros. Ultimate (SSBU) r
 
 ### Known Issues (from test suite)
 - ❌ Stage detection returns "unknown" for all stages (needs implementation)
+- ⚠️ Stock loss detection has ~52-74% recall depending on video (OCR reliability issues)
+
+### Improvement Path
+The main bottleneck for stock loss accuracy is the scene classifier's respawn detection. More labeled training data will improve:
+1. **Respawn detection** - Primary signal for stock losses
+2. **Scene state accuracy** - Better neutral/advantage/disadvantage classification
+3. **Edge case handling** - Reduce reliance on complex OCR-based heuristics
+
+Use `tools/scene_labeler.py` to label more videos, then retrain with `tools/train_scene_classifier.py`.
 
 ### Detection Approach
 - **Damage Tracking**: PaddleOCR reads damage percentages every 0.5s
+- **Scene Classification**: ML model (ConvNeXt-Tiny ONNX) classifies positional states
 - **State Classification**: Based on who took damage (advantage = you hit them)
+- **Neutral Reset**: Position-based (`both_grounded` → neutral) with time-based fallback
 - **Stock Loss Detection**: Confirmed by 2 consecutive low-damage frames after high damage
 - **Segment Filtering**: Minimum duration thresholds reduce noise (1s neutral, 1.5s adv/disadv)
 
@@ -36,6 +47,11 @@ RunItBack is a Python CLI tool that analyzes Super Smash Bros. Ultimate (SSBU) r
 | `STOCK_LOSS_COOLDOWN` | 10.0s | Min time between stock losses per player |
 | `CONFIRM_FRAMES` | 3 | Consecutive low-damage frames to confirm stock loss |
 | `MIN_KILL_DAMAGE` | 50 | Minimum damage before stock loss is plausible |
+
+### Performance Optimizations
+- **Skip OCR outside game bounds**: Frames before GO! or after GAME! skip OCR entirely (active)
+- **Parallel OCR**: Multiprocessing implementation exists but disabled (pool overhead issue)
+- **Batch scene classification**: Scene classifier processes all frames in one batch
 
 ## Tournament-Legal Stages (Hazards Off)
 
@@ -144,7 +160,8 @@ Future enhancements:
 | `runitback/cli.py` | CLI interface and game detection logic |
 | `runitback/classification/detector.py` | **Game state detection** (neutral/advantage/disadvantage) |
 | `runitback/classification/states.py` | Data structures (GameState, FrameState, StateSegment, StockLoss) |
-| `runitback/cv/ocr.py` | PaddleOCR damage percentage reading |
+| `runitback/cv/ocr.py` | PaddleOCR damage percentage reading (with parallel batch support) |
+| `runitback/cv/scene_classifier.py` | ML scene classification (ConvNeXt-Tiny ONNX) |
 | `runitback/cv/ui_detector.py` | HUD detection, stock counting, frame type classification |
 | `runitback/cv/stage_detector.py` | Stage detection with histogram matching and platform counting |
 | `runitback/cv/character_detector.py` | Character detection (Gemini + fallback template matching) |
@@ -167,7 +184,8 @@ Skills are defined in `.claude/skills/`.
 
 ## Known Limitations
 
-1. **OCR Accuracy**: Damage reading can have errors during visual effects or motion blur
-2. **Stock Loss Detection**: Relies on damage reset pattern; may miss edge cases
+1. **OCR Accuracy**: Damage reading can have errors during visual effects or motion blur (especially Steve's mining effects)
+2. **Stock Loss Detection**: Relies on damage reset pattern; may miss edge cases. Respawn-based detection via scene classifier needs more training data
 3. **Stage Detection**: Battlefield vs Small Battlefield disambiguation can be unreliable
 4. **No Edgeguard/Ledgetrap Detection**: Requires character position tracking (future work)
+5. **Player Attribution**: In some cases, stock losses are attributed to the wrong player due to OCR timing issues

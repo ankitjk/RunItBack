@@ -42,6 +42,11 @@ dev = [
     "mypy>=1.0.0",
     "ruff>=0.1.0",
 ]
+ml = [
+    "onnxruntime>=1.15.0",
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+]
 
 [project.scripts]
 runitback = "runitback.cli:app"

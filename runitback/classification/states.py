@@ -14,6 +14,45 @@ class GameState(Enum):
     UNKNOWN = "unknown"
 
 
+class DisadvantageType(Enum):
+    """Sub-type of disadvantage based on positional state.
+
+    These describe WHY a player is in disadvantage and help with
+    analyzing player performance in specific situations.
+    """
+
+    # Basic disadvantage (hit but position unclear)
+    UNKNOWN = "unknown"
+
+    # Juggle - one player airborne above stage
+    JUGGLE = "juggle"
+
+    # Edgeguard - one or both players offstage
+    OFFSTAGE = "offstage"
+
+    # Ledgetrap - one player on ledge
+    LEDGETRAP = "ledgetrap"
+
+    # Tech chase - one player knocked down on stage
+    TECH_CHASE = "tech_chase"
+
+    # Respawning - player on invincibility platform
+    RESPAWNING = "respawning"
+
+    @property
+    def display_name(self) -> str:
+        """Human-readable name."""
+        names = {
+            DisadvantageType.UNKNOWN: "Unknown",
+            DisadvantageType.JUGGLE: "Juggle",
+            DisadvantageType.OFFSTAGE: "Offstage/Edgeguard",
+            DisadvantageType.LEDGETRAP: "Ledgetrap",
+            DisadvantageType.TECH_CHASE: "Tech Chase",
+            DisadvantageType.RESPAWNING: "Respawning",
+        }
+        return names.get(self, self.value)
+
+
 @dataclass
 class StockLoss:
     """Record of a stock loss event.
@@ -38,6 +77,7 @@ class StateSegment:
         start_frame: Frame index where segment starts
         end_frame: Frame index where segment ends
         stock_losses: List of stock losses that occurred during this segment
+        disadvantage_type: Sub-type of disadvantage (only for DISADVANTAGE state)
     """
 
     state: GameState
@@ -46,6 +86,7 @@ class StateSegment:
     start_frame: int
     end_frame: int
     stock_losses: list[StockLoss] = None
+    disadvantage_type: DisadvantageType = DisadvantageType.UNKNOWN
 
     def __post_init__(self):
         if self.stock_losses is None:
@@ -57,6 +98,11 @@ class StateSegment:
         return self.end_time - self.start_time
 
     def __repr__(self) -> str:
+        if self.state == GameState.DISADVANTAGE and self.disadvantage_type != DisadvantageType.UNKNOWN:
+            return (
+                f"StateSegment({self.state.value}:{self.disadvantage_type.value}, "
+                f"{self.start_time:.1f}s - {self.end_time:.1f}s)"
+            )
         return (
             f"StateSegment({self.state.value}, "
             f"{self.start_time:.1f}s - {self.end_time:.1f}s)"
@@ -79,6 +125,8 @@ class FrameState:
         state: Detected game state for the analyzed player
         p1_stock_loss: True if P1 lost a stock this frame
         p2_stock_loss: True if P2 lost a stock this frame
+        scene_state: Positional scene classification (from ML model)
+        disadvantage_type: Sub-type of disadvantage based on scene
     """
 
     timestamp: float
@@ -92,6 +140,8 @@ class FrameState:
     state: GameState = GameState.UNKNOWN
     p1_stock_loss: bool = False
     p2_stock_loss: bool = False
+    scene_state: Optional[str] = None  # SceneState value (avoid circular import)
+    disadvantage_type: DisadvantageType = DisadvantageType.UNKNOWN
 
 
 @dataclass
