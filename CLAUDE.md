@@ -180,7 +180,7 @@ Custom Claude Code skills for common development tasks:
 | `/analyze <url>` | Analyze a YouTube SSBU replay video |
 | `/debug-video <url>` | Debug detection on a video with verbose logging and frame extraction |
 
-Skills are defined in `.claude/skills/`.
+Skills are defined in `.claude/skills/<name>/SKILL.md`, each with YAML frontmatter (`name`, `description`). The directory-plus-`SKILL.md` layout is required — a flat `.claude/skills/<name>.md` file is not discovered.
 
 ## Known Limitations
 
