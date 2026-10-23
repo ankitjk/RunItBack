@@ -21,6 +21,21 @@ Write those down, because they are lost when the session ends.
 /log-changes <commit-range>  # log a specific range, e.g. main~3..main
 ```
 
+## Scale to the change
+
+Every change is recorded, but the record should cost about as much as the
+change did. Pick the size first:
+
+| Size | Examples | What to write | Issue line |
+|------|----------|---------------|------------|
+| **Small** | Typo, comment, formatting, rename, one-line fix with an obvious cause | One bullet under a `**Minor:**` list in today's entry (start the entry with just its heading if there is none) | Usually `Issues: none` |
+| **Medium** | A bug fix, a new skill or script, a config change | A short entry: heading, then **Changes** with what and why per file. Skip Session Goal, Problem, and Left Open unless they add something | `Fixes:`/`Found:` if it touches a tracked bug |
+| **Large** | Behaviour change in detection, an investigation, anything with measured results | The full template in step 4 | As applicable |
+
+When unsure, go one size down. A short accurate entry beats a long padded one,
+and the commit message already carries the detail for small changes. Steps that
+do not apply at the chosen size (e.g. syncing CLAUDE.md for a typo) are skipped.
+
 ## Instructions
 
 1. **Find what changed.** Use the range if given. Otherwise combine:

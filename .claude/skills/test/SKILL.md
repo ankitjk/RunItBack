@@ -20,17 +20,17 @@ Run pytest for the RunItBack project with common configurations.
 
 1. Run pytest:
    ```bash
-   python -m pytest tests/ -v
+   .venv/bin/python -m pytest tests/ -v
    ```
 
 2. For quick tests (skip slow ones):
    ```bash
-   python -m pytest tests/ -v -m "not slow"
+   .venv/bin/python -m pytest tests/ -v -m "not slow"
    ```
 
 3. For a specific test file or pattern:
    ```bash
-   python -m pytest tests/ -v -k "<pattern>"
+   .venv/bin/python -m pytest tests/ -v -k "<pattern>"
    ```
 
 4. After running, summarize:

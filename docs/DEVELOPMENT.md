@@ -120,6 +120,19 @@ This document chronicles the development process for RunItBack, including method
 - Every grep pattern in the skill matched the log, except the original characters pattern. That one hit 2,184 lines, almost all "No Gemini API key" warnings, so it was replaced with `Title hints\|falling back to template`, which matches 6.
 - The same run named Steve vs Palutena as "Little Mac vs Zero Suit Samus", which led to ISSUE-013.
 
+**Follow-up: instruction checker and scaled change log**
+
+*Changes:*
+- `scripts/check_docs.py` (new) - checks every command and reference in skills, agents, CLAUDE.md and ISSUES.md against the code. It covers interpreter, CLI subcommands and flags, `--player`, `runitback` imports (read with `ast`, nothing imported), script paths, and `file.py:line` refs.
+  - Why: every broken skill and agent command this session was a name nobody checked.
+  - Run on the pre-fix files from `3243123`/`c318f1c`, it reports all 14 mechanical faults.
+  - Two faults it cannot catch: the prose-only wrong cache path, and `download_video` missing an argument (it checks names, not call signatures).
+- `scripts/hooks/pre-commit` - runs the checker (~0.3s) only when a commit touches instructions or the code they reference.
+- `tests/test_docs.py` (new) - the repo must pass the checker, and the checker must still catch the six original mistakes.
+- `.claude/skills/test/SKILL.md` - bare `python` changed to `.venv/bin/python`. The checker's first run found this; the skill had never worked here.
+- `.claude/skills/log-changes/SKILL.md` - a "Scale to the change" table: small, medium and large changes get one bullet, a short entry, or the full template. Added because recording every typo in full would slow development more than it helps.
+- `CLAUDE.md` - documents the checker and the rule "never write a command into instructions without running it first".
+
 ---
 
 ### January 11, 2026 - Stock Loss Detection Investigation

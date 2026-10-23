@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Block commits that contain secrets.
+# Block commits that contain secrets, or instructions naming things that do
+# not exist (scripts/check_docs.py).
 #
 # Enabled with:  git config core.hooksPath scripts/hooks
 #
@@ -25,6 +26,25 @@ staged_list="$(
     | awk -F'\t' '$1 != "-" && $2 != "-" { print $3 }'
 )"
 [ -z "$staged_list" ] && exit 0
+
+# Commands and references in Claude's instructions must be real. Runs only when
+# the commit touches the instructions or the code they name (~0.3s). Checks the
+# working tree, so stage everything you have edited before committing.
+if printf '%s\n' "$staged_list" \
+    | grep -qE '^(\.claude/|CLAUDE\.md$|docs/ISSUES\.md$|runitback/|tools/|scripts/)'; then
+  if [ -x "$repo_root/.venv/bin/python" ]; then
+    if ! "$repo_root/.venv/bin/python" "$repo_root/scripts/check_docs.py"; then
+      echo ""
+      echo "pre-commit: Claude's instructions name a command, flag, function, or"
+      echo "            file that does not exist (above) - commit blocked."
+      echo "            Fix the instruction, or the code it refers to."
+      echo ""
+      exit 1
+    fi
+  else
+    echo "pre-commit: .venv not found, skipping scripts/check_docs.py."
+  fi
+fi
 
 fail() {
   echo ""

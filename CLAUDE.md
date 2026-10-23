@@ -235,6 +235,22 @@ It uses `detect-secrets` (in the `dev` extras) when available, and falls back to
 provider-specific patterns otherwise. Bypass with `git commit --no-verify` only
 for confirmed false positives.
 
+### Instruction check
+
+Skills, agents, and CLAUDE.md are instructions Claude executes, so a wrong
+command in them fails silently until someone follows it. `scripts/check_docs.py`
+checks every command and reference in them against the code: interpreter
+(`.venv/bin/python`, never bare `python`), `runitback` subcommands and flags,
+`analyze` given `--player`, `from runitback... import` names, script paths, and
+`file.py:line` references (also in `docs/ISSUES.md`). It runs from the
+pre-commit hook when a commit touches `.claude/`, `CLAUDE.md`, `docs/ISSUES.md`,
+`runitback/`, `tools/`, or `scripts/` (~0.3s), and in the test suite.
+
+It proves names exist, not that a command is right. So: **never write a command
+into a skill, agent, or doc without running it first**, and prefer a script in
+the skill's folder over a long inline `python -c` snippet - a script can be run
+and tested.
+
 ## Issue Tracking
 
 `docs/ISSUES.md` is the list of known bugs (bugs only - planned features stay
@@ -253,6 +269,8 @@ Found: ISSUE-012      # ISSUE-012 was added (or reopened)
 does not match `docs/ISSUES.md` as staged. It is enabled by the same
 `core.hooksPath` setting as the secret scan. Workflow for a change:
 make it -> `/issues` (fix/add) -> `/log-changes` -> commit with the line it gives.
+Scale the record to the change: a typo gets one bullet and `Issues: none`;
+`/log-changes` defines small, medium, and large.
 
 ## Known Limitations
 
