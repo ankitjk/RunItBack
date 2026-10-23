@@ -1,3 +1,8 @@
+---
+name: test
+description: Run the RunItBack pytest suite - all tests, quick (non-slow) tests, or a pattern match - and summarize pass/fail results. Use when asked to run tests, check the suite, or verify a change did not break anything.
+---
+
 # /test - Run the test suite
 
 Run pytest for the RunItBack project with common configurations.
@@ -13,19 +18,19 @@ Run pytest for the RunItBack project with common configurations.
 
 ## Instructions
 
-1. Activate the virtual environment and run pytest:
+1. Run pytest:
    ```bash
-   ./venv/bin/python -m pytest tests/ -v
+   python -m pytest tests/ -v
    ```
 
 2. For quick tests (skip slow ones):
    ```bash
-   ./venv/bin/python -m pytest tests/ -v -m "not slow"
+   python -m pytest tests/ -v -m "not slow"
    ```
 
 3. For a specific test file or pattern:
    ```bash
-   ./venv/bin/python -m pytest tests/ -v -k "<pattern>"
+   python -m pytest tests/ -v -k "<pattern>"
    ```
 
 4. After running, summarize:
@@ -47,3 +52,4 @@ The test suite covers:
 - Tests use cached Gemini API responses from `.cache/` for speed
 - Some tests are marked `@pytest.mark.slow` for integration tests
 - The `GEMINI_API_KEY` environment variable must be set for live API tests
+- Run from the project root with the project environment active (`pip install -e .` per README)

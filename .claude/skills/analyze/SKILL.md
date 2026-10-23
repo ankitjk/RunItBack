@@ -1,3 +1,8 @@
+---
+name: analyze
+description: Analyze a Super Smash Bros. Ultimate replay from a YouTube URL, detecting games, characters, stages, and stock losses. Use when given a YouTube URL to analyze or asked to run the RunItBack pipeline over a video.
+---
+
 # /analyze - Analyze a SSBU replay video
 
 Analyze a Super Smash Bros. Ultimate replay video from a YouTube URL.
@@ -14,12 +19,12 @@ Analyze a Super Smash Bros. Ultimate replay video from a YouTube URL.
 
 1. Run the analysis command:
    ```bash
-   ./venv/bin/python -m runitback analyze "<youtube_url>"
+   python -m runitback analyze "<youtube_url>"
    ```
 
 2. If `--player` is specified, add it to the command:
    ```bash
-   ./venv/bin/python -m runitback analyze "<youtube_url>" --player <1|2>
+   python -m runitback analyze "<youtube_url>" --player <1|2>
    ```
 
 3. The tool will:
@@ -55,3 +60,4 @@ Game End: 2:30
 - First analysis of a video takes longer (downloads video, makes API calls)
 - Subsequent runs use cached results from `.cache/` and `.video_cache/`
 - Set `GEMINI_API_KEY` environment variable for Gemini Vision detection
+- Run from the project root with the project environment active (`pip install -e .` per README)

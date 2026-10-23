@@ -1,3 +1,8 @@
+---
+name: debug-video
+description: Debug RunItBack detection on a video using verbose logging, saved debug frames, or single-timestamp inspection. Use when detection output is wrong and the cause needs diagnosing - bad game boundaries, wrong characters, or missed stock losses.
+---
+
 # /debug-video - Debug detection on a specific video
 
 Debug frame extraction and detection for a SSBU replay video with verbose output.
@@ -16,7 +21,7 @@ Debug frame extraction and detection for a SSBU replay video with verbose output
 
 1. Run analysis with debug logging:
    ```bash
-   ./venv/bin/python -m runitback analyze "<youtube_url>" --debug 2>&1 | head -200
+   python -m runitback analyze "<youtube_url>" --debug 2>&1 | head -200
    ```
 
 2. Look for:
@@ -30,7 +35,7 @@ Debug frame extraction and detection for a SSBU replay video with verbose output
 
 1. Use the frame extractor to save frames:
    ```bash
-   ./venv/bin/python -c "
+   python -c "
    from runitback.video.downloader import download_video
    from runitback.video.frame_extractor import FrameExtractor
    import cv2
@@ -53,7 +58,7 @@ Debug frame extraction and detection for a SSBU replay video with verbose output
 
 1. Extract frame at a specific timestamp and run detection:
    ```bash
-   ./venv/bin/python -c "
+   python -c "
    from runitback.video.downloader import download_video
    from runitback.cv.llm_detector import detect_game_screen_with_gemini
    import cv2
@@ -94,3 +99,4 @@ Debug frame extraction and detection for a SSBU replay video with verbose output
 - Debug frames are saved to `debug_frames/` (gitignored)
 - Use `--debug` flag for verbose logging
 - Set `use_cache=False` to force fresh API calls
+- Run from the project root with the project environment active (`pip install -e .` per README)

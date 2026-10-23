@@ -42,6 +42,7 @@ dev = [
     "pytest-cov>=4.0.0",
     "mypy>=1.0.0",
     "ruff>=0.1.0",
+    "detect-secrets>=1.5.0",
 ]
 train = [
     "torch>=2.0.0",

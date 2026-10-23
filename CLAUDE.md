@@ -123,8 +123,14 @@ Character detection uses Google's Gemini Vision API (gemini-2.5-flash) for accur
 
 ### Configuration
 
-- **API Key**: Set `GEMINI_API_KEY` environment variable
-- **Disable Gemini**: Set `RUNITBACK_USE_GEMINI=0` to force template matching
+- **API Key**: Set `GEMINI_API_KEY` environment variable. Read directly via
+  `os.environ` at each call site - it is NOT a `Settings` field, so a `.env`
+  entry will be silently ignored (`config.py` uses the `RUNITBACK_` prefix).
+- **Disable Gemini**: Leave `GEMINI_API_KEY` unset. Detection logs a warning
+  and falls back to template matching. (There is no `RUNITBACK_USE_GEMINI`
+  switch - that was documented but never implemented.)
+- **Current state**: No key is configured. Gemini-dependent paths are inactive,
+  so character detection runs on template matching only.
 - **Cache Location**: `.cache/` directory (relative to project root)
   - `llm_results/` - Character detection cache
   - `stage_results/` - Stage detection cache
@@ -180,7 +186,38 @@ Custom Claude Code skills for common development tasks:
 | `/analyze <url>` | Analyze a YouTube SSBU replay video |
 | `/debug-video <url>` | Debug detection on a video with verbose logging and frame extraction |
 
-Skills are defined in `.claude/skills/`.
+Skills are defined in `.claude/skills/<name>/SKILL.md`, each with YAML frontmatter (`name`, `description`). The directory-plus-`SKILL.md` layout is required — a flat `.claude/skills/<name>.md` file is not discovered.
+
+## Secrets
+
+Never commit credentials. A Gemini key was committed in `f8e1834` and sat in
+public history for nine months before being removed; that key has since been
+deleted and must not be reused.
+
+Store keys outside the repo. Preferred (macOS):
+
+```bash
+security add-generic-password -a "$USER" -s GEMINI_API_KEY -w   # prompts, no echo
+# then in ~/.zprofile:
+export GEMINI_API_KEY="$(security find-generic-password -a "$USER" -s GEMINI_API_KEY -w 2>/dev/null)"
+```
+
+A `.env` file is gitignored but will not work for `GEMINI_API_KEY` without a
+code change - see the Configuration note above.
+
+### Pre-commit secret scan
+
+`scripts/hooks/pre-commit` blocks commits containing probable secrets. It is
+version-controlled but `core.hooksPath` is local config, so enable it once per
+clone:
+
+```bash
+git config core.hooksPath scripts/hooks
+```
+
+It uses `detect-secrets` (in the `dev` extras) when available, and falls back to
+provider-specific patterns otherwise. Bypass with `git commit --no-verify` only
+for confirmed false positives.
 
 ## Known Limitations
 
