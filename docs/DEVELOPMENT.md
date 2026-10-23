@@ -8,7 +8,7 @@ This document chronicles the development process for RunItBack, including method
 
 ## Changelog
 
-### October 23, 2026 - Agent Test Run, Prompt Fixes & /log-changes Skill
+### October 23, 2026 - Agent Test Run, Prompt Fixes, Change Log & Issue Tracking
 
 **Session Goal:** Test the three read-only agents added in `3243123` on real work, fix what they got wrong, and add a way to keep this changelog current.
 
@@ -44,6 +44,19 @@ This document chronicles the development process for RunItBack, including method
   - States that Gemini-off also disables the stock-loss post-pass.
   - Corrects the cache description: two caches, `.video_cache/` for labeling tools and `~/.cache/runitback/` for the pipeline.
 
+- `docs/ISSUES.md` (new): a single list of open bugs, by severity. It is seeded with 11 issues (ISSUE-001 to 011), taken from this session's agent reports, the January 11 investigation, and code TODOs.
+  - Bugs only; features stay in Future Improvements.
+  - Fixed issues move to a one-line Fixed list rather than being deleted. A regression can then be reopened under its old ID, and old changelog references still resolve.
+- `scripts/hooks/commit-msg` (new): every commit message must carry `Issues: none`, `Fixes: ISSUE-NNN` or `Found: ISSUE-NNN`, and the line must match the staged ISSUES.md.
+  - Added because skills and CLAUDE.md only *ask* for the tracker to be updated, and nothing checked that it was.
+  - The hook can't judge whether something is a bug, but it forces an explicit answer at every commit and rejects one that contradicts the file.
+  - Tested on 13 cases: missing line, typo, unknown ID, half-moved fix, merge commit, and others.
+- `.claude/skills/issues/SKILL.md` (new): `/issues` lists issues, adds them (verifying `file:line` first), moves them to Fixed once a fix is confirmed, and reopens regressions.
+- `.claude/skills/log-changes/SKILL.md`: new steps that move fixed issues to the Fixed list by ID, file Left Open items into ISSUES.md, and give the commit's issue line.
+- `CLAUDE.md`:
+  - The Known Issues list is replaced with a pointer to `docs/ISSUES.md`, so two lists can't drift apart.
+  - That list said stage detection "needs implementation". It is actually implemented but switched off at `cli.py:443`.
+
 **Results (agent test runs, Gemini off):**
 - **label-auditor** - Worked as briefed.
   - Corpus is one video (`XUkRx6CpL04`, 645s labeled). `respawning` is about 63 estimated frames, far under the ~200 floor.
@@ -69,10 +82,14 @@ This document chronicles the development process for RunItBack, including method
   - 9 of the 17 misses are final-stock GAME! losses, consistent with the Gemini post-pass being off.
   - 2 misses are right-time-wrong-player (Steve vs Palutena 1:39 and 2:09).
 
-**Left Open:**
-- The tag-as-damage OCR bug is diagnosed, not fixed. Suggested fix: end the damage ROIs above the tag line, or reject OCR text with no real digits; parse `1189` as 118.9 instead of dropping it.
-- `.claude/skills/debug-video/SKILL.md` still uses `--debug` and the nonexistent `FrameExtractor`.
-- Benchmark downloads need yt-dlp cookies (`--cookies-from-browser`) to get past YouTube's bot check for the two uncached videos.
+**Left Open** (all tracked in `docs/ISSUES.md`):
+- Tag-as-damage OCR bug, diagnosed but not fixed - ISSUE-001
+- Merged decimals dropped as over 999 - ISSUE-002
+- Final-stock losses missed with Gemini off - ISSUE-005
+- Two benchmark videos blocked by YouTube - ISSUE-007
+- Benchmark summary omits failed videos without saying so - ISSUE-008
+- `/debug-video` still has broken commands - ISSUE-010
+- `/analyze` has the same broken commands (bare `python`, no `--player`, wrong cache path) - ISSUE-012
 
 ---
 

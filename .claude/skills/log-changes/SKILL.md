@@ -66,16 +66,27 @@ Write those down, because they are lost when the session ends.
    Drop **Left Open** if there is nothing to put in it. Keep **Results**
    honest: if nothing was run, say so.
 
-5. **Update the `**Last Updated:**` date** at the top of the file.
+5. **Keep `docs/ISSUES.md` in step** (see the `/issues` skill):
+   - If the work fixed a tracked issue, move it to the Fixed list there and
+     name its ID in the entry, e.g. "`ocr.py` - trim damage ROI - fixes ISSUE-001".
+   - Anything under **Left Open** that is a real bug or problem gets added
+     there, and the entry cites its new ID. Left Open is the session's note;
+     ISSUES.md is the list that persists.
 
-6. **Sync current-state facts if they changed.** If a change makes a statement
+6. **Update the `**Last Updated:**` date** at the top of the file.
+
+7. **Sync current-state facts if they changed.** If a change makes a statement
    in `CLAUDE.md` or the reference sections of `DEVELOPMENT.md` untrue (a
    parameter value, a flag name, a file path, a "Known Issues" item), fix that
    statement too and mention it in the entry.
 
-7. **Print a rundown** in chat - a table of file / what changed / why, one row
+8. **Print a rundown** in chat - a table of file / what changed / why, one row
    per file, followed by anything left open. This is the quick summary; the
    DEVELOPMENT.md entry is the permanent one.
+
+9. **Give the commit's issue line** - `Fixes: ISSUE-NNN`, `Found: ISSUE-NNN`,
+   or `Issues: none` - for whoever commits. `scripts/hooks/commit-msg` rejects
+   a commit without one, or with one that does not match `docs/ISSUES.md`.
 
 ## Notes
 

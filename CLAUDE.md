@@ -19,9 +19,11 @@ RunItBack is a Python CLI tool that analyzes Super Smash Bros. Ultimate (SSBU) r
 - ✅ **Stock loss tracking** - hybrid damage-reset + Smart Gemini detection
 - ✅ **Multi-game set support** - automatic game boundary detection with GO!→GAME! pairing
 
-### Known Issues (from test suite)
-- ❌ Stage detection returns "unknown" for all stages (needs implementation)
-- ⚠️ Stock loss detection has ~52-74% recall depending on video (OCR reliability issues)
+### Known Issues
+Tracked in **[docs/ISSUES.md](docs/ISSUES.md)** - the single list of open bugs,
+by severity. Manage it with `/issues`; don't keep a second list here.
+Headline: stock-loss recall is 52-100% per video (72.6% over 4 videos, Gemini
+off, October 23), and stage detection is switched off (always `unknown`).
 
 ### Improvement Path
 The main bottleneck for stock loss accuracy is the scene classifier's respawn detection. More labeled training data will improve:
@@ -194,6 +196,7 @@ Custom Claude Code skills for common development tasks:
 | `/analyze <url>` | Analyze a YouTube SSBU replay video |
 | `/debug-video <url>` | Debug detection on a video with verbose logging and frame extraction |
 | `/log-changes` | Add a dated entry to the `docs/DEVELOPMENT.md` Changelog: what was modified and why |
+| `/issues` | List, add, or remove (once fixed) entries in `docs/ISSUES.md`, the open-issues list |
 
 **After finishing any change to code, config, or tooling, run `/log-changes`
 before committing**, so the DEVELOPMENT.md entry lands in the same commit as
@@ -232,7 +235,28 @@ It uses `detect-secrets` (in the `dev` extras) when available, and falls back to
 provider-specific patterns otherwise. Bypass with `git commit --no-verify` only
 for confirmed false positives.
 
+## Issue Tracking
+
+`docs/ISSUES.md` is the list of known bugs (bugs only - planned features stay
+in "Future Improvements" in `docs/DEVELOPMENT.md`). Open issues sit at the top
+by severity; fixed ones become one line in a **Fixed** list at the bottom.
+
+Every commit message must end with an issue line, above `Co-Authored-By`:
+
+```
+Issues: none          # feature, docs, refactor - no tracked bug fixed or found
+Fixes: ISSUE-001      # ISSUE-001 is now in the Fixed list
+Found: ISSUE-012      # ISSUE-012 was added (or reopened)
+```
+
+`scripts/hooks/commit-msg` rejects a commit with no issue line, or one that
+does not match `docs/ISSUES.md` as staged. It is enabled by the same
+`core.hooksPath` setting as the secret scan. Workflow for a change:
+make it -> `/issues` (fix/add) -> `/log-changes` -> commit with the line it gives.
+
 ## Known Limitations
+
+Design limits of the current approach. Specific bugs are in `docs/ISSUES.md`.
 
 1. **OCR Accuracy**: Damage reading can have errors during visual effects or motion blur (especially Steve's mining effects)
 2. **Stock Loss Detection**: Relies on damage reset pattern; may miss edge cases. Respawn-based detection via scene classifier needs more training data

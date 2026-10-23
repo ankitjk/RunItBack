@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+#
+# Require every commit to say what it did to the issue list, and check that
+# docs/ISSUES.md agrees.
+#
+# Enabled with:  git config core.hooksPath scripts/hooks
+#
+# The commit message must contain at least one of these lines:
+#
+#   Issues: none            - neither fixes nor finds a tracked bug
+#                             (features, docs, refactors)
+#   Fixes: ISSUE-001        - ISSUE-001 must be in the "## Fixed" list
+#                             and no longer open
+#   Found: ISSUE-012        - ISSUE-012 must be an open issue (also used
+#                             when a fixed issue is reopened)
+#
+# Several IDs may share a line ("Fixes: ISSUE-001, ISSUE-002"), and Fixes and
+# Found may both appear. The check reads ISSUES.md as staged - the version
+# this commit will contain - not the working tree.
+#
+# Merge and revert commits are skipped. Bypass with --no-verify.
+#
+# Portable to bash 3.2 (the version macOS ships) - no mapfile, no assoc arrays.
+
+set -uo pipefail
+
+msg_file="$1"
+repo_root="$(git rev-parse --show-toplevel)" || exit 1
+cd "$repo_root" || exit 1
+
+issues_file="docs/ISSUES.md"
+
+# Message without git's comment lines (the commented-out diff from -v too).
+msg="$(sed -e '/^# ------------------------ >8 ------------------------$/,$d' \
+           -e '/^#/d' "$msg_file")"
+
+first_line="$(printf '%s\n' "$msg" | sed -n '1p')"
+case "$first_line" in
+  Merge\ *|Revert\ *|fixup!\ *|squash!\ *) exit 0 ;;
+esac
+[ -f "$repo_root/.git/MERGE_HEAD" ] && exit 0
+
+fail() {
+  echo ""
+  echo "commit-msg: $1"
+  echo ""
+  echo "  End the commit message with one or more of:"
+  echo "    Issues: none           (no tracked bug fixed or found)"
+  echo "    Fixes: ISSUE-NNN       (after moving it to '## Fixed' in $issues_file)"
+  echo "    Found: ISSUE-NNN       (after adding it to $issues_file)"
+  echo ""
+  echo "  The /issues skill does the ISSUES.md edits. See 'Issue Tracking' in CLAUDE.md."
+  echo ""
+  exit 1
+}
+
+trailers="$(printf '%s\n' "$msg" | grep -E '^(Issues|Fixes|Found):' || true)"
+[ -z "$trailers" ] && fail "no issue line in the commit message."
+
+has_none=0
+printf '%s\n' "$trailers" | grep -qE '^Issues:[[:space:]]*none[[:space:]]*$' && has_none=1
+
+bad_issues="$(printf '%s\n' "$trailers" | grep -E '^Issues:' \
+  | grep -vE '^Issues:[[:space:]]*none[[:space:]]*$' || true)"
+[ -n "$bad_issues" ] && fail "'Issues:' only takes 'none' - got: $bad_issues"
+
+fixes="$(printf '%s\n' "$trailers" | grep -E '^Fixes:' | grep -oE 'ISSUE-[0-9]{3}' || true)"
+found="$(printf '%s\n' "$trailers" | grep -E '^Found:' | grep -oE 'ISSUE-[0-9]{3}' || true)"
+
+# A Fixes:/Found: line with no well-formed ID is a typo, not a declaration.
+for kind in Fixes Found; do
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    printf '%s\n' "$line" | grep -qE 'ISSUE-[0-9]{3}' \
+      || fail "'$line' has no ID in the form ISSUE-NNN."
+  done <<EOF
+$(printf '%s\n' "$trailers" | grep -E "^$kind:" || true)
+EOF
+done
+
+if [ "$has_none" -eq 1 ] && [ -n "$fixes$found" ]; then
+  fail "'Issues: none' contradicts the Fixes:/Found: line(s) also present."
+fi
+
+# Nothing to cross-check for 'Issues: none'.
+[ -z "$fixes$found" ] && exit 0
+
+staged="$(git show ":$issues_file" 2>/dev/null)" \
+  || fail "$issues_file is not in this commit, so no issue ID can be checked."
+
+# Open issues are '### ISSUE-NNN:' headings above '## Fixed'; fixed ones are
+# '- ISSUE-NNN:' lines below it.
+open_part="$(printf '%s\n' "$staged" | sed '/^## Fixed/,$d')"
+fixed_part="$(printf '%s\n' "$staged" | sed -n '/^## Fixed/,$p')"
+
+errors=""
+for id in $fixes; do
+  printf '%s\n' "$fixed_part" | grep -qE "^- $id:" \
+    || errors="$errors\n  Fixes: $id - not in the '## Fixed' list"
+  printf '%s\n' "$open_part" | grep -qE "^### $id:" \
+    && errors="$errors\n  Fixes: $id - still listed as open"
+done
+for id in $found; do
+  printf '%s\n' "$open_part" | grep -qE "^### $id:" \
+    || errors="$errors\n  Found: $id - not listed as an open issue"
+done
+
+if [ -n "$errors" ]; then
+  printf '\ncommit-msg: the issue lines do not match %s (as staged):' "$issues_file"
+  printf "$errors\n"
+  fail "fix $issues_file (and git add it), or correct the message."
+fi
+
+exit 0
