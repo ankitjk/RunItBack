@@ -1,0 +1,37 @@
+# Fast tests on every push and pull request: no video downloads, no API keys.
+# The slow tests (full benchmark videos) are run locally - see README.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  fast-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # opencv-python needs the system OpenGL library.
+      - run: sudo apt-get update && sudo apt-get install -y libgl1
+
+      - run: pip install -e ".[dev]"
+
+      # PaddleOCR downloads its models (~100MB) on first use; keep them between runs.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.paddlex
+          key: paddlex-models-v1
+
+      - name: Instruction check
+        run: python scripts/check_docs.py
+
+      - name: Fast tests
+        run: python -m pytest -m "not slow" -q

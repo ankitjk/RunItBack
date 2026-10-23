@@ -73,3 +73,7 @@ testpaths = ["tests"]
 markers = [
     "slow: downloads videos and makes live API calls; takes minutes per test",
 ]
+filterwarnings = [
+    # PaddleOCR warns on import when ccache (a C++ build cache) is absent - harmless.
+    "ignore:No ccache found:UserWarning",
+]

@@ -15,7 +15,7 @@ with the `/issues` skill.
 - Planned features (edgeguard detection, Slippi, etc.) are not issues - they live
   under "Future Improvements" in `docs/DEVELOPMENT.md`.
 
-**Next ID:** ISSUE-014
+**Next ID:** ISSUE-015
 
 Severity: **High** = causes wrong results on real videos. **Medium** = blocks
 measuring or improving accuracy. **Low** = tooling, docs, or performance.
@@ -46,6 +46,17 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
   kill is likely.
 - **Where:** `runitback/cv/ocr.py:135` (`0 <= value <= 999`)
 - **Suggested fix:** For a 4-digit read, try it as `NNN.N` before discarding.
+
+### ISSUE-014: Leading damage digit lost at the ROI's left edge
+- **Area:** OCR - **Found:** 2026-10-23, writing fixture-based tests
+- **What happens:** P1 showing 118.9% is read as 18.9%. In the saved crop the
+  leading "1" sits on the left edge of the damage ROI, partly cut off, and OCR
+  drops it. Cause not confirmed beyond that observation.
+- **Evidence:** `tests/fixtures/frames/damage_88.5s_p1.png` (Steve vs Palutena
+  88.5s); `test_leading_digit_not_lost` is an expected failure until fixed.
+- **Where:** `runitback/cv/ui_detector.py:74` (`P1_DAMAGE_ROI` x-range starts at 0.27)
+- **Suggested fix:** Widen the ROI's left edge, checking the crop does not then
+  take in the character portrait. Fix alongside ISSUE-001, which changes the same ROIs.
 
 ### ISSUE-003: `both_reset` guard blocks a real stock loss
 - **Area:** Stock-loss detection - **Found:** 2026-01-11 investigation

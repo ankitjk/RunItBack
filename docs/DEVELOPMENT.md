@@ -133,6 +133,20 @@ This document chronicles the development process for RunItBack, including method
 - `.claude/skills/log-changes/SKILL.md` - a "Scale to the change" table: small, medium and large changes get one bullet, a short entry, or the full template. Added because recording every typo in full would slow development more than it helps.
 - `CLAUDE.md` - documents the checker and the rule "never write a command into instructions without running it first".
 
+**Follow-up: repo prepared for outside reviewers (part 1 of 2)**
+
+*Changes:*
+- `LICENSE` (new) - MIT text. `pyproject.toml` and the README already declared MIT, but there was no license file, so GitHub showed none.
+- `debug_stock_loss.py`, `debug_stock_loss_detailed.py` - deleted. They were scratch scripts from December 31, hardcoded to the old machine's path, and replaced by `tools/debug_stock_losses.py`.
+- Fast tests: before this, 31 of 34 tests downloaded full videos, so a reviewer could run almost nothing.
+  - `tests/test_damage_parsing.py`, `test_stock_loss_logic.py`, `test_cli_helpers.py` - pure logic, no video or models. Stock-loss tests feed synthetic per-frame damage into the detector.
+  - `tests/test_frame_detectors.py` - GO!/GAME!/menu detection and OCR on real frames stored in `tests/fixtures/frames/` (~540 KB). Full frames are JPEG; damage crops are PNG, because JPEG shifted an OCR read from 113 to 115.
+  - Known bugs are strict expected failures: ISSUE-001 (two tests), 002, 003 and 014. A fix flips them to passing, and the suite then fails until the marker is removed, so a fix can't go unnoticed.
+  - Result: `pytest -m "not slow"` gives 52 passed, 6 xfailed in ~7s.
+- `.github/workflows/tests.yml` (new) - runs the instruction checker and the fast tests on every push. It is unverified until its first run on GitHub.
+- `pyproject.toml` - filters PaddleOCR's harmless "No ccache found" warning out of test output.
+- ISSUE-014 recorded, found while writing the tests: P1's 118.9% is read as 18.9%, because the leading digit sits on the ROI's left edge.
+
 ---
 
 ### January 11, 2026 - Stock Loss Detection Investigation
