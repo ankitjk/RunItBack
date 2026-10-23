@@ -45,15 +45,10 @@ pip install -e .
 
 ### Scene Classifier Model
 
-The scene classifier model is not included in the repository due to its size (~107MB). Download it from the [latest GitHub release](https://github.com/ankitjk/RunItBack/releases):
-
-1. Download `scene_classifier.onnx` and `scene_classifier.onnx.data` from the release assets
-2. Place both files in `data/models/`
+The scene classifier model (~107MB) is not included in the repository. Fetch it from the latest GitHub release:
 
 ```bash
-mkdir -p data/models
-mv ~/Downloads/scene_classifier.onnx data/models/
-mv ~/Downloads/scene_classifier.onnx.data data/models/
+./scripts/fetch_model.sh
 ```
 
 Without the model, RunItBack still runs but scene classification will be disabled, reducing the accuracy of game state detection.
