@@ -2,7 +2,7 @@
 
 This document chronicles the development process for RunItBack, including methods tried, what worked, what didn't, and the current state of the codebase.
 
-**Last Updated:** January 11, 2026
+**Last Updated:** October 23, 2026
 
 ---
 
@@ -173,10 +173,36 @@ Uses Python multiprocessing to distribute OCR across multiple workers:
 | `non_gameplay` | Menus, loading, results screen |
 
 **Training Results:**
-- Dataset: ~3,500 labeled frames from 5 videos
-- Validation accuracy: ~92%
-- Model size: 110MB (ONNX)
+- Dataset: **one** labeled video (`XUkRx6CpL04`, 3 games, 791 segments).
+  Re-simulating `extract_labeled_frames.py` against the label file yields
+  **~1,583 frames**, of which only 63 are `respawning`.
+- Model size: 107MB total — `scene_classifier.onnx` (665KB graph) plus
+  `scene_classifier.onnx.data` (106MB external weights). Both files are
+  required and must sit in the same directory.
 - Inference time: ~6.5ms per frame on M2 Pro
+
+> **Corrected 2026-10-23.** This block previously read "~3,500 labeled frames
+> from 5 videos" and "Validation accuracy: ~92%". Both figures are wrong or
+> unverified:
+>
+> - **Video count:** the model was trained on one video, not five. The five
+>   videos in `.video_cache/` came from benchmark runs, not labeling. A search
+>   of the training machine found only the one label file.
+> - **Frame count:** one video yields ~1,583 frames under the extractor's
+>   current parameters (`DEFAULT_INTERVAL=0.5`, `RARE_INTERVAL=0.25`,
+>   `EDGE_PADDING=0.15`), not ~3,500.
+> - **Accuracy:** ~92% is unverified and, more importantly, not a
+>   generalization metric. `create_train_val_test_splits()` does a
+>   *frame-level* `random.shuffle` within a single video, so a frame at
+>   t=10.0s can land in train while t=10.5s lands in test. Those are
+>   near-duplicate images. Any score from that split measures memorization of
+>   near-duplicates, not the ability to classify unseen footage.
+>
+> The split is reproducible (`seed=42`), so the ~92% figure can be
+> *reproduced* — but reproducing a leaky metric does not validate it. A
+> meaningful number requires evaluating on a **held-out video** the model has
+> never seen. See the January 11 entry: that is the same labeling work already
+> on the roadmap.
 
 **Integration (`runitback/cv/scene_classifier.py`):**
 - ONNX Runtime inference
