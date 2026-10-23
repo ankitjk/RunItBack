@@ -42,6 +42,11 @@ class ExpectedGame:
 @dataclass
 class TestVideo:
     """Test video with expected game data."""
+
+    # Not a test class - the Test* name matches pytest's default
+    # python_classes glob, so opt out of collection explicitly.
+    __test__ = False
+
     url: str
     video_id: str
     description: str

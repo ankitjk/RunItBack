@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Gemini API key must be set in environment
 if "GEMINI_API_KEY" not in os.environ:
     print("Warning: GEMINI_API_KEY not set. Some detection features may be limited.")
-    print("Set it with: export GEMINI_API_KEY='your-key'")
+    print("Set it with: export GEMINI_API_KEY='your-key'")  # pragma: allowlist secret
     print()
 
 from dataclasses import dataclass
@@ -43,6 +43,11 @@ class ExpectedGame:
 @dataclass
 class TestVideo:
     """Test video with expected data."""
+
+    # Not a test class - the Test* name matches pytest's default
+    # python_classes glob, so opt out of collection explicitly.
+    __test__ = False
+
     url: str
     video_id: str
     description: str
