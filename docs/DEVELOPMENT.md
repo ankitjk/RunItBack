@@ -171,6 +171,18 @@ The README told reviewers to run `ruff check .` and `mypy runitback`. Before thi
 - **Verified:** ruff, mypy, `check_docs.py` and the fast tests all pass. Every `runitback` module imports and every file compiles.
 - **Left open:** the first CI run of `a1def5b` failed at "Fast tests" on Linux, after install and the instruction check passed. The job log needs a GitHub login to read, so the cause is unknown.
 
+**Follow-up: README rewritten for outside readers (part 3 of 3)**
+
+*Changes:*
+- `README.md` - rewritten. Every claim was checked against the code or a run this session.
+  - Added: a pipeline diagram, a results table (today's benchmark, Gemini off, 4 of 6 sets, with the reason), and the agreed Gemini wording.
+  - Fixed contradictions: the "Supported Stages" list (detection is switched off), the ~74% recall figure (measured with Gemini), and an understated character limitation.
+  - Development section: `pytest -m "not slow"` as the default (plain `pytest` downloads videos), plus the ruff/mypy/checker commands, which now pass.
+  - Corrected the disadvantage tags to the real display names (`Offstage/Edgeguard`, `Ledgetrap`, `Tech Chase`).
+  - Retraining instructions: `scene_labeler.py` needs a video argument, and dependencies come from `tools/requirements-*.txt`.
+  - Added CI and license badges, short design notes, a status section linking ISSUES.md, and a note that Claude Code is used with versioned instructions.
+- Not changed, noted: the `[train]` extra in `pyproject.toml` omits `onnx`, which `requirements-training.txt` includes. The README points to the requirements file.
+
 ---
 
 ### January 11, 2026 - Stock Loss Detection Investigation
