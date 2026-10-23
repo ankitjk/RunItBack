@@ -11,21 +11,52 @@ A CLI tool to analyze Super Smash Bros. Ultimate replays from YouTube.
 - **Stock loss tracking** - detects when stocks are lost via damage reset and respawn detection
 - **Scene classification** - ML-based detection of positional states (grounded, airborne, offstage, respawning)
 
-## Installation
+## Getting Started
 
-Requires Python 3.11+ and FFmpeg.
+### Prerequisites
+
+- **Python 3.11 or higher** — check with `python3 --version`
+  - macOS: `brew install python@3.11`
+  - Ubuntu/Debian: `sudo apt install python3.11 python3.11-venv`
+  - Or download from [python.org](https://www.python.org/downloads/)
+
+- **FFmpeg** — used for video downloading and frame extraction
+  - macOS: `brew install ffmpeg`
+  - Ubuntu/Debian: `sudo apt install ffmpeg`
+
+- **Git** — to clone the repository
+  - macOS: comes pre-installed (or `brew install git`)
+  - Ubuntu/Debian: `sudo apt install git`
+
+### Installation
 
 ```bash
-# Install FFmpeg (required for video processing)
-# macOS
-brew install ffmpeg
+# 1. Clone the repository
+git clone https://github.com/ankitjk/RunItBack.git
+cd RunItBack
 
-# Ubuntu/Debian
-sudo apt install ffmpeg
+# 2. Create and activate a virtual environment
+python3 -m venv venv
+source venv/bin/activate    # macOS/Linux
 
-# Install RunItBack
+# 3. Install RunItBack and its dependencies
 pip install -e .
 ```
+
+### Scene Classifier Model
+
+The scene classifier model is not included in the repository due to its size (~107MB). Download it from the [latest GitHub release](https://github.com/ankitjk/RunItBack/releases):
+
+1. Download `scene_classifier.onnx` and `scene_classifier.onnx.data` from the release assets
+2. Place both files in `data/models/`
+
+```bash
+mkdir -p data/models
+mv ~/Downloads/scene_classifier.onnx data/models/
+mv ~/Downloads/scene_classifier.onnx.data data/models/
+```
+
+Without the model, RunItBack still runs but scene classification will be disabled, reducing the accuracy of game state detection.
 
 ### Optional: Gemini API Key
 
@@ -36,6 +67,14 @@ export GEMINI_API_KEY="your-api-key"
 ```
 
 Without an API key, character detection falls back to template matching.
+
+### Verify Installation
+
+```bash
+runitback --help
+```
+
+If you see the help output, you're good to go.
 
 ## Usage
 
@@ -147,6 +186,9 @@ runitback/
 # Install dev dependencies
 pip install -e ".[dev]"
 
+# Install training dependencies (PyTorch, for retraining the scene classifier)
+pip install -e ".[train]"
+
 # Run tests
 pytest
 
@@ -166,7 +208,7 @@ Development tools are in the `tools/` directory:
 
 - `scene_labeler.py` - PyQt5 app for labeling training data
 - `extract_labeled_frames.py` - Extract frames from labeled videos
-- `train_scene_classifier.py` - Train the scene classification model
+- `train_scene_classifier.py` - Train the scene classification model (requires `[train]` deps)
 - `test_stock_losses.py` - Test stock loss detection accuracy
 
 ## Known Limitations
