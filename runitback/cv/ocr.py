@@ -26,6 +26,12 @@ def get_ocr():
         # to avoid unwanted rotation of game UI elements
         _ocr_instance = PaddleOCR(
             lang="en",
+            # The model version every test and benchmark result was measured with.
+            ocr_version="PP-OCRv5",
+            # oneDNN (Intel CPU acceleration, on by default) makes every OCR call
+            # fail on Linux x86 with paddlepaddle 3.3: "ConvertPirAttribute2Runtime
+            # Attribute not support". Apple Silicon never uses it, so this is a no-op there.
+            enable_mkldnn=False,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
@@ -40,6 +46,12 @@ def _init_ocr_worker():
 
     _ocr_instance = PaddleOCR(
         lang="en",
+        # The model version every test and benchmark result was measured with.
+        ocr_version="PP-OCRv5",
+        # oneDNN (Intel CPU acceleration, on by default) makes every OCR call
+        # fail on Linux x86 with paddlepaddle 3.3: "ConvertPirAttribute2Runtime
+        # Attribute not support". Apple Silicon never uses it, so this is a no-op there.
+        enable_mkldnn=False,
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,

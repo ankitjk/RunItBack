@@ -130,7 +130,7 @@ Character detection uses Google's Gemini Vision API (gemini-2.5-flash) for accur
   entry will be silently ignored (`config.py` uses the `RUNITBACK_` prefix).
 - **Disable Gemini**: Leave `GEMINI_API_KEY` unset. Detection logs a warning
   and falls back to template matching. `RUNITBACK_USE_GEMINI=0` also exists,
-  but only `character_detector.py:23` reads it - it does not turn off the
+  but only `character_detector.py:22` reads it - it does not turn off the
   stock-loss or stage Gemini calls.
 - **Current state**: No key is configured. Gemini-dependent paths are inactive,
   so character detection runs on template matching only, and the stock-loss

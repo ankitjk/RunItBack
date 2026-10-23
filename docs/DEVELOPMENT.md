@@ -183,6 +183,23 @@ The README told reviewers to run `ruff check .` and `mypy runitback`. Before thi
   - Added CI and license badges, short design notes, a status section linking ISSUES.md, and a note that Claude Code is used with versioned instructions.
 - Not changed, noted: the `[train]` extra in `pyproject.toml` omits `onnx`, which `requirements-training.txt` includes. The README points to the requirements file.
 
+**Follow-up: first CI run failed - OCR broken on Linux**
+
+- *Symptom:* `gh run view --log-failed` showed both OCR fixture tests reading `None`. Every OCR call raised `ConvertPirAttribute2RuntimeAttribute not support`.
+- *Wrong first diagnosis:* CI had installed paddleocr 3.7.0 (PP-OCRv6 models) while this Mac had 3.4.1 (PP-OCRv5). Pinning to 3.4.x and PP-OCRv5 seemed to explain it.
+  - The second CI run had **identical** versions and models to this Mac and failed with the same error, which ruled it out.
+- *Actual cause:* PaddlePaddle on Linux x86 CPUs runs through oneDNN (Intel's CPU acceleration, PaddleOCR's `enable_mkldnn`, on by default). With paddlepaddle 3.3 that path fails on every call. Apple Silicon never uses oneDNN, which is why it only broke on Linux.
+  - Impact: **OCR returned nothing on any Linux x86 machine**, so damage reading, and with it stock-loss detection, was silently broken there. That includes a reviewer's machine. The fast tests caught it on their first run.
+- *Changes:*
+  - `runitback/cv/ocr.py` - both `PaddleOCR(...)` calls set `enable_mkldnn=False` (the fix) and `ocr_version="PP-OCRv5"`, the model every result was measured with.
+  - `pyproject.toml` - `paddleocr>=3.4,<3.5`, the tested version. This guards against unreviewed upgrades; it was not the fix.
+  - Disabling oneDNN may slow OCR on Intel/AMD CPUs, which is preferable to no OCR.
+- *Found:* ISSUE-015 - OCR engine failures are swallowed per frame, which is why this showed up only as missing readings.
+- *Line references re-pointed:* the ruff and mypy edits shifted lines in `ocr.py`, `detector.py`, `character_detector.py`, `cli.py` and others.
+  - 14 `file.py:line` references in ISSUES.md, CLAUDE.md and `ocr-investigator.md` still pointed at real lines but at the wrong code (some at blank lines), so `check_docs.py` passed them.
+  - All were re-pointed by searching for their code, and the `ocr.py` ones again after the oneDNN fix shifted that file.
+  - This is the checker's known gap: it proves a line exists, not that it is the right one.
+
 ---
 
 ### January 11, 2026 - Stock Loss Detection Investigation

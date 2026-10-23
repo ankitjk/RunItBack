@@ -33,7 +33,7 @@ grep -n "OCR detected" debug_frames/run.log
 
 Use `--games N` to restrict the run to the game containing the timestamp.
 
-`ocr.py:190` logs `OCR detected: '<text>' (conf: <n>)` per call. That is the
+`ocr.py:200` logs `OCR detected: '<text>' (conf: <n>)` per call. That is the
 record of what OCR actually read.
 
 To inspect specific frames, extract them to `debug_frames/` (gitignored),
@@ -77,7 +77,7 @@ Modes 1-4 are from the January 11 investigation (`docs/DEVELOPMENT.md`):
 5. **Player tags read as damage.** Found October 23 (Steve vs Palutena, 1:39).
    The damage ROIs (`ui_detector.py:74-75`) extend to y=0.98 and take in the
    player tag under each number. The parser's letter-to-digit substitutions
-   (`ocr.py:125-127`: O->0, L->1, B->8, G->6) turn a tag into a number, e.g.
+   (`ocr.py:135-137`: O->0, L->1, B->8, G->6) turn a tag into a number, e.g.
    "gleeb glob" -> 61, "rohan" -> 0. A phantom 0 fakes a reset; a phantom
    non-zero blocks the `< 20` respawn check. Look at the raw OCR text for
    letters, not just the parsed value. Merged decimals (`118.9` read as

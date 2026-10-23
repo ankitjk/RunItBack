@@ -15,7 +15,7 @@ with the `/issues` skill.
 - Planned features (edgeguard detection, Slippi, etc.) are not issues - they live
   under "Future Improvements" in `docs/DEVELOPMENT.md`.
 
-**Next ID:** ISSUE-015
+**Next ID:** ISSUE-016
 
 Severity: **High** = causes wrong results on real videos. **Medium** = blocks
 measuring or improving accuracy. **Low** = tooling, docs, or performance.
@@ -34,7 +34,7 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 - **Evidence:** Steve vs Palutena game 1 - false P2 loss at 86s, P2's real death
   at ~89s hidden by the resulting cooldown, P1's death at 99s credited to P2.
 - **Where:** `runitback/cv/ui_detector.py:74-75` (ROIs),
-  `runitback/cv/ocr.py:125-127` (letter substitutions)
+  `runitback/cv/ocr.py:135-137` (letter substitutions)
 - **Suggested fix:** End the ROIs above the tag line, and/or reject OCR text
   whose letters outnumber its digits before substituting.
 
@@ -44,7 +44,7 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
   is read as `1189`, `132.0%` as `1320`. Anything over 999 is discarded, so a
   player at high percent often has no damage reading at all - exactly when a
   kill is likely.
-- **Where:** `runitback/cv/ocr.py:135` (`0 <= value <= 999`)
+- **Where:** `runitback/cv/ocr.py:145` (`0 <= value <= 999`)
 - **Suggested fix:** For a 4-digit read, try it as `NNN.N` before discarding.
 
 ### ISSUE-014: Leading damage digit lost at the ROI's left edge
@@ -65,7 +65,7 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
   is missed. ISSUE-001's phantom 0% readings make this fire more often.
 - **Evidence:** Steve vs Palutena 102.0s - log reads "Game transition detected
   (both players reset to 0%)" mid-game.
-- **Where:** `runitback/classification/detector.py:512` (and its uses at 533, 543, 553)
+- **Where:** `runitback/classification/detector.py:506` (and its uses at 527, 540, 553)
 
 ### ISSUE-004: Stale max damage is carried forward
 - **Area:** Stock-loss detection - **Found:** 2026-01-11 investigation
@@ -74,8 +74,8 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
   value, crediting the death to the wrong player.
 - **Evidence:** Steve vs Palutena - stale P2 max of 113 (from 88.5s) took credit
   for P1's death at 100.5s.
-- **Where:** `runitback/classification/detector.py:479` (refill),
-  `:590` (`p2_damage_before_respawn = p2_recent_max_damage`)
+- **Where:** `runitback/classification/detector.py:473` (refill),
+  `:596` (`p2_damage_before_respawn = p2_recent_max_damage`)
 - **Note:** ISSUE-001 to 004 together cause the "right time, wrong player"
   attribution flips (2 in the October 23 benchmark). Re-check flips after fixing them.
 
@@ -86,7 +86,7 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
   returns nothing.
 - **Evidence:** 9 of 17 misses in the October 23 benchmark (4 videos, Gemini
   off) were final-stock GAME! losses.
-- **Where:** `runitback/classification/detector.py:1057` (`_smart_gemini_postprocess`)
+- **Where:** `runitback/classification/detector.py:1063` (`_smart_gemini_postprocess`)
 - **Suggested fix:** A non-Gemini signal - the GAME! marker is already detected
   in `cli.py`; the player whose damage was last rising at GAME! lost the stock.
 
@@ -99,12 +99,25 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
   without them, so the title cannot correct it.
 - **Evidence:** `analyze nmzdyQz6msI --player 1 --games 1` - game 1 header reads
   "You: Little Mac | Opponent: Zero Suit Samus".
-- **Where:** `runitback/cv/character_detector.py:1265`
+- **Where:** `runitback/cv/character_detector.py:1264`
   (`_detect_characters_template_matching(frames, sample_positions)` - hints not passed)
 - **Suggested fix:** Pass the title hints to the fallback and restrict matching
   to the hinted characters when there are exactly two.
 
 ## Medium
+
+### ISSUE-015: OCR engine failures are swallowed per frame
+- **Area:** OCR - **Found:** 2026-10-23, first CI run
+- **What happens:** If PaddleOCR itself is broken (bad install, incompatible
+  model), every read raises, `read_damage_percentage` logs a warning and returns
+  no value, and the pipeline carries on. The analysis completes with no damage
+  data instead of failing, so a broken install looks like a run with poor results.
+- **Evidence:** CI on `a1def5b` installed paddleocr 3.7.0 (PP-OCRv6); every OCR
+  call failed with `ConvertPirAttribute2RuntimeAttribute not support`, and the
+  only symptom was two tests reading `None`.
+- **Where:** `runitback/cv/ocr.py:209` (`except` -> warning, `return None`)
+- **Suggested fix:** Distinguish "no text in this crop" from "the engine failed":
+  re-raise, or abort after N consecutive engine errors.
 
 ### ISSUE-006: Too little labeled data to retrain the scene classifier
 - **Area:** Scene classifier - **Found:** 2026-10-23, `label-auditor`
@@ -128,7 +141,7 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 - **What happens:** A video that errors is printed and skipped, and the summary
   recall is computed over the videos that ran. The October 23 run printed
   "Recall: 72.6% (45/62)" with no sign that 27 ground-truth losses were left out.
-- **Where:** `tools/test_stock_losses.py:454` (`except Exception`)
+- **Where:** `tools/test_stock_losses.py:453` (`except Exception`)
 - **Suggested fix:** Print "N of 6 videos analyzed" in the summary and exit
   non-zero when any video failed.
 
@@ -136,7 +149,7 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 - **Area:** Stage detection - **Found:** pre-existing (`TODO` in code)
 - **What happens:** Every game reports `Stage.UNKNOWN`. `stage_detector.py`
   exists but the call is disabled, and there are no stage test images.
-- **Where:** `runitback/cli.py:443`, `tests/test_game_detection.py:570`
+- **Where:** `runitback/cli.py:440`, `tests/test_game_detection.py:571`
 
 ## Low
 
@@ -144,7 +157,7 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 - **Area:** Performance - **Found:** 2026-01-06
 - **What happens:** `read_damage_batch_parallel` exists but is not used because
   process-pool overhead outweighed the gain. A benchmark run takes ~20 min per video.
-- **Where:** `runitback/cv/ocr.py:275`
+- **Where:** `runitback/cv/ocr.py:285`
 
 ---
 
