@@ -65,3 +65,8 @@ select = ["E", "F", "I", "N", "W", "UP"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: downloads videos and makes live API calls; takes minutes per test",
+]
