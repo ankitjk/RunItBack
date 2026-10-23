@@ -15,7 +15,7 @@ with the `/issues` skill.
 - Planned features (edgeguard detection, Slippi, etc.) are not issues - they live
   under "Future Improvements" in `docs/DEVELOPMENT.md`.
 
-**Next ID:** ISSUE-013
+**Next ID:** ISSUE-014
 
 Severity: **High** = causes wrong results on real videos. **Medium** = blocks
 measuring or improving accuracy. **Low** = tooling, docs, or performance.
@@ -79,6 +79,20 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 - **Suggested fix:** A non-Gemini signal - the GAME! marker is already detected
   in `cli.py`; the player whose damage was last rising at GAME! lost the stock.
 
+### ISSUE-013: Template-matching fallback misidentifies characters and ignores title hints
+- **Area:** Character detection - **Found:** 2026-10-23, verifying the fixed `/analyze` skill
+- **What happens:** With no Gemini key, character detection falls back to
+  template matching, which named Steve vs Palutena as "Little Mac vs Zero Suit
+  Samus". The video title names both characters and they are parsed as hints
+  (`Title hints - P1: ['Palutena', 'Steve']`), but the fallback is called
+  without them, so the title cannot correct it.
+- **Evidence:** `analyze nmzdyQz6msI --player 1 --games 1` - game 1 header reads
+  "You: Little Mac | Opponent: Zero Suit Samus".
+- **Where:** `runitback/cv/character_detector.py:1265`
+  (`_detect_characters_template_matching(frames, sample_positions)` - hints not passed)
+- **Suggested fix:** Pass the title hints to the fallback and restrict matching
+  to the hinted characters when there are exactly two.
+
 ## Medium
 
 ### ISSUE-006: Too little labeled data to retrain the scene classifier
@@ -115,28 +129,6 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 
 ## Low
 
-### ISSUE-010: `/debug-video` skill has broken commands
-- **Area:** Tooling - **Found:** 2026-10-23 agent test run
-- **What happens:** It uses `--debug` (the flag is `--verbose`), omits
-  `--player` (so `analyze` blocks on a prompt), runs bare `python` (not on
-  PATH), imports a `FrameExtractor` class and a `detect_game_screen_with_gemini`
-  function that do not exist, and calls `download_video` without `cache_dir`.
-  Every command in the skill fails. None of these names has ever existed in
-  git history - the skill (added in `48c7fc1`) was written without being run,
-  and stayed undiscoverable until `307c66a`, so nothing surfaced it.
-- **Where:** `.claude/skills/debug-video/SKILL.md`
-- **Suggested fix:** Copy the working commands from `.claude/agents/ocr-investigator.md`.
-
-### ISSUE-012: `/analyze` skill has broken commands
-- **Area:** Tooling - **Found:** 2026-10-23, reading the skill
-- **What happens:** It runs bare `python` (not on PATH - fails immediately),
-  runs `analyze` without `--player` when none is given (blocks on a prompt
-  Claude cannot answer), and says videos cache in `.video_cache/` (the
-  pipeline uses `~/.cache/runitback/`).
-- **Where:** `.claude/skills/analyze/SKILL.md`
-- **Suggested fix:** Use `.venv/bin/python`, default to `--player 1` or ask the
-  user before running, and correct the cache path. Fix together with ISSUE-010.
-
 ### ISSUE-011: Parallel OCR is disabled
 - **Area:** Performance - **Found:** 2026-01-06
 - **What happens:** `read_damage_batch_parallel` exists but is not used because
@@ -150,4 +142,5 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 One line per fixed issue, newest first:
 `- ISSUE-NNN: <title> (fixed YYYY-MM-DD, DEVELOPMENT.md <Month D, YYYY>)`
 
-_None yet._
+- ISSUE-012: `/analyze` skill has broken commands (fixed 2026-10-23, DEVELOPMENT.md October 23, 2026)
+- ISSUE-010: `/debug-video` skill has broken commands (fixed 2026-10-23, DEVELOPMENT.md October 23, 2026)

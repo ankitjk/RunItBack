@@ -5,98 +5,96 @@ description: Debug RunItBack detection on a video using verbose logging, saved d
 
 # /debug-video - Debug detection on a specific video
 
-Debug frame extraction and detection for a SSBU replay video with verbose output.
+See what RunItBack's detectors saw on a SSBU replay, either across a whole run
+(verbose log) or at chosen timestamps (frames, damage crops, detector output).
+
+For a full diagnosis of one missed or misattributed stock loss, delegate to the
+`ocr-investigator` agent instead - it does this end to end and checks the known
+failure modes.
 
 ## Usage
 
 ```
-/debug-video <youtube_url>                    # Full debug analysis
-/debug-video <youtube_url> --frames           # Extract and save debug frames
-/debug-video <youtube_url> --timestamp <sec>  # Debug specific timestamp
+/debug-video <youtube_url>                          # Verbose log of a full run
+/debug-video <youtube_url> --games <n>              # Same, one game only (faster)
+/debug-video <youtube_url> --timestamp <sec> [...]  # Inspect specific moments
 ```
+
+Run every command from the project root with `.venv/bin/python` - the venv is
+not activated in Claude's shell, and bare `python` is not on PATH.
 
 ## Instructions
 
-### Full Debug Analysis
+### Verbose log of a run
 
-1. Run analysis with debug logging:
+1. Run the analysis with DEBUG logging, writing to a log file. Always pass
+   `--player` - without it `analyze` stops to ask, and Claude cannot answer.
+   Pass `--games` if the problem is in one game; a full set takes ~20 min.
    ```bash
-   python -m runitback analyze "<youtube_url>" --debug 2>&1 | head -200
+   .venv/bin/python -m runitback analyze "<youtube_url>" --player 1 --verbose [--games <n>] > debug_frames/run.log 2>&1
+   ```
+   `--verbose` (`-v`) is what turns on DEBUG logging. There is no `--debug` flag.
+
+2. Grep the log for the scenario rather than reading it whole - it has
+   thousands of lines:
+
+   | Looking at | Grep for |
+   |------------|----------|
+   | Game boundaries | `GO! detected\|GAME! detected\|Paired GO!\|Skipping GO!\|Validated GAME!` |
+   | Stock losses | `stock loss detected\|Game transition detected` |
+   | OCR damage reads | `OCR detected` (raw text and confidence, per read) |
+   | Characters | `Title hints\|falling back to template` (the result is in each game's header: `You: ... \| Opponent: ...`) |
+
+   ```bash
+   grep -n "GO! detected\|GAME! detected\|Paired GO!" debug_frames/run.log
    ```
 
-2. Look for:
-   - GO! screen detections and timestamps
-   - GAME! screen detections and timestamps
-   - Game boundary pairing logic
-   - Character detection results
-   - Stock loss events
+3. Summarize what the lines show; quote only the few that matter.
 
-### Extract Debug Frames
+### Inspect specific timestamps
 
-1. Use the frame extractor to save frames:
+1. Run the inspection script with one or more timestamps in seconds:
    ```bash
-   python -c "
-   from runitback.video.downloader import download_video
-   from runitback.video.frame_extractor import FrameExtractor
-   import cv2
-   import os
-
-   video_path = download_video('<youtube_url>')
-   extractor = FrameExtractor(video_path, sample_fps=2.0)
-
-   os.makedirs('debug_frames', exist_ok=True)
-   for i, (frame, ts) in enumerate(extractor.extract_frames()):
-       if i < 100:  # First 100 frames
-           cv2.imwrite(f'debug_frames/frame_{i:04d}_{ts:.1f}s.png', frame)
-   print(f'Saved frames to debug_frames/')
-   "
+   .venv/bin/python .claude/skills/debug-video/inspect_frames.py "<youtube_url>" <sec> [<sec> ...]
    ```
+   For each timestamp it prints the frame type, GO!/GAME! detection, each
+   player's damage (parsed value, confidence, and the **raw OCR text**), and
+   the scene classification. It saves to `debug_frames/`:
+   - `<sec>s.png` - the full frame
+   - `<sec>s_p1_roi.png`, `<sec>s_p2_roi.png` - the exact crops OCR read
 
-2. Examine saved frames in `debug_frames/` directory.
+2. Read the saved images to compare what was on screen with what was detected.
+   The ROI crops are the most useful: they show exactly what OCR was given.
 
-### Debug Specific Timestamp
-
-1. Extract frame at a specific timestamp and run detection:
-   ```bash
-   python -c "
-   from runitback.video.downloader import download_video
-   from runitback.cv.llm_detector import detect_game_screen_with_gemini
-   import cv2
-
-   video_path = download_video('<youtube_url>')
-   cap = cv2.VideoCapture(video_path)
-   cap.set(cv2.CAP_PROP_POS_MSEC, <timestamp_sec> * 1000)
-   ret, frame = cap.read()
-   cap.release()
-
-   if ret:
-       result = detect_game_screen_with_gemini(frame, use_cache=False)
-       print(f'Detection result: {result}')
-       cv2.imwrite('debug_frame.png', frame)
-       print('Saved frame to debug_frame.png')
-   "
-   ```
+Around a stock loss, inspect several points from ~15s before to ~10s after -
+the damage drop that confirms a stock loss comes *after* the kill. For
+example `... 84 88 92 96 100 104`.
 
 ## Common Debug Scenarios
 
 ### Game boundaries incorrect
-- Check GO!/GAME! detection confidence
-- Verify pairing logic in logs
-- Look for replay menu GO! screens being included
+- Grep the boundary lines; check each GO! is paired with the next GAME!
+- Look for replay-menu GO! screens being kept. `Skipping GO!` lines show GO!
+  markers dropped because the game after them was too short
+- Inspect the suspect timestamps to see whether GO!/GAME! detection fired
 
 ### Character detection wrong
-- Extract frame from character select or in-game
-- Check Gemini response for character names
-- Verify player 1 vs player 2 assignment
+- With no `GEMINI_API_KEY`, characters come from template matching - say so,
+  it is the usual cause
+- Inspect a mid-game timestamp and look at the HUD portraits in the frame
+- Check whether P1/P2 are swapped rather than misidentified
 
-### Stock loss missed
-- Check damage values around kill timestamp
-- Verify stock counter detection
-- Look for white flash detection
+### Stock loss missed or credited to the wrong player
+- Inspect frames around the kill; compare the ROI crops with the parsed damage
+- Raw OCR text containing letters (a player tag) means the known tag-as-damage
+  bug - see `docs/ISSUES.md`, ISSUE-001
+- Check `docs/ISSUES.md` for the other known stock-loss bugs before theorizing
 
 ## Notes
 
-- Debug frames are saved to `debug_frames/` (gitignored)
-- Use `--debug` flag for verbose logging
-- Set `use_cache=False` to force fresh API calls
-- Run from the project root with the project environment active (`pip install -e .` per README)
+- Videos for `analyze` cache in `~/.cache/runitback/` (`settings.cache_dir`);
+  a second run on the same video skips the download.
+- `debug_frames/` is gitignored.
+- PaddleOCR prints its own startup messages (model checks, ccache warning) -
+  they are harmless.
+- A real bug found while debugging goes into `docs/ISSUES.md` via `/issues add`.

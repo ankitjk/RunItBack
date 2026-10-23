@@ -5,59 +5,55 @@ description: Analyze a Super Smash Bros. Ultimate replay from a YouTube URL, det
 
 # /analyze - Analyze a SSBU replay video
 
-Analyze a Super Smash Bros. Ultimate replay video from a YouTube URL.
+Run the full RunItBack pipeline over one YouTube replay and summarize the result.
 
 ## Usage
 
 ```
-/analyze <youtube_url>           # Analyze with default settings
-/analyze <youtube_url> --player 1  # Analyze from Player 1's perspective
-/analyze <youtube_url> --player 2  # Analyze from Player 2's perspective
+/analyze <youtube_url>                 # Asks which player's perspective first
+/analyze <youtube_url> --player 1      # Player 1's perspective
+/analyze <youtube_url> --player 2      # Player 2's perspective
+/analyze <youtube_url> --games 1,3     # Only some games ('1', '1,3', '2-4')
 ```
 
 ## Instructions
 
-1. Run the analysis command:
+1. **Get the player.** `analyze` stops to prompt for it if `--player` is
+   missing, and Claude cannot answer that prompt. If the user gave no
+   `--player`, ask them which player's perspective they want (1 = left HUD,
+   2 = right HUD) before running.
+
+2. **Run it** from the project root with the venv's interpreter - the venv is
+   not activated in Claude's shell, and bare `python` is not on PATH:
    ```bash
-   python -m runitback analyze "<youtube_url>"
+   .venv/bin/python -m runitback analyze "<youtube_url>" --player <1|2> [--games <spec>]
    ```
+   It is slow - roughly 20 minutes per set on first run, mostly download and
+   OCR. Run it in the background and tell the user it has started.
 
-2. If `--player` is specified, add it to the command:
-   ```bash
-   python -m runitback analyze "<youtube_url>" --player <1|2>
-   ```
+3. **What it does:**
+   - Downloads the video (cached in `~/.cache/runitback/`, so reruns skip this)
+   - Samples a frame every 0.5s and finds each game from its GO! and GAME! screens
+   - Identifies characters - Gemini if `GEMINI_API_KEY` is set, otherwise
+     template matching (less accurate)
+   - Reads damage with OCR, classifies each frame's scene, and detects stock
+     losses and neutral/advantage/disadvantage segments
+   - Prints a summary and timeline per game
 
-3. The tool will:
-   - Download the video (cached in `.video_cache/`)
-   - Extract frames and detect game boundaries
-   - Identify characters and stages
-   - Track stock losses throughout each game
-   - Output a timeline per game
-
-4. After running, summarize the results:
-   - Number of games detected
-   - Characters identified
-   - Key events per game
-
-## Example Output
-
-```
-═══════════════════════════════════════
-GAME 1
-Stage: Unknown
-Player 1: Mario | Player 2: Fox
-═══════════════════════════════════════
-Game Start: 0:15
-Stock Events:
-  0:45 - P2 loses stock (3 → 2)
-  1:12 - P1 loses stock (3 → 2)
-  ...
-Game End: 2:30
-```
+4. **Summarize** for the user:
+   - Number of games, and each game's characters and length
+   - Stock losses per game, with timestamps and who lost them
+   - Anything that looks wrong (a game count that does not match the set,
+     "Unknown" characters, a game with no stock losses)
 
 ## Notes
 
-- First analysis of a video takes longer (downloads video, makes API calls)
-- Subsequent runs use cached results from `.cache/` and `.video_cache/`
-- Set `GEMINI_API_KEY` environment variable for Gemini Vision detection
-- Run from the project root with the project environment active (`pip install -e .` per README)
+- **Stage is always "unknown"** - stage detection is switched off (ISSUE-009).
+- **No Gemini key is configured**, so character detection is template matching
+  only and final-stock losses at GAME! are often missed (ISSUE-005). Say so
+  when presenting results.
+- **Template matching often names the wrong characters** (ISSUE-013). Compare
+  the detected characters with the video title, which usually names them, and
+  point out any mismatch rather than reporting the detection as fact.
+- Known accuracy bugs are listed in `docs/ISSUES.md`. If a result looks wrong,
+  `/debug-video` or the `ocr-investigator` agent can find out why.

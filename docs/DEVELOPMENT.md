@@ -88,8 +88,37 @@ This document chronicles the development process for RunItBack, including method
 - Final-stock losses missed with Gemini off - ISSUE-005
 - Two benchmark videos blocked by YouTube - ISSUE-007
 - Benchmark summary omits failed videos without saying so - ISSUE-008
-- `/debug-video` still has broken commands - ISSUE-010
-- `/analyze` has the same broken commands (bare `python`, no `--player`, wrong cache path) - ISSUE-012
+- Template-matching fallback misidentifies characters and drops title hints - ISSUE-013 (found during the skill fixes below)
+
+**Follow-up: `/debug-video` and `/analyze` skills fixed (ISSUE-010, ISSUE-012)**
+
+*Problem:* every command in both skills failed.
+- Both ran bare `python`, which is not on PATH.
+- `/debug-video` used a `--debug` flag, and imported a `FrameExtractor` class and a `detect_game_screen_with_gemini` function. `git log -S` shows none of the three has ever existed: the skill was written without being run in `48c7fc1`.
+- Neither skill passed `--player`, so `analyze` blocks on a prompt Claude cannot answer.
+- `/analyze` gave the wrong video cache path.
+- The skills went unnoticed because they were undiscoverable until `307c66a`, which fixed the layout but did not run them.
+
+*Changes:*
+- `.claude/skills/debug-video/SKILL.md` - rewritten.
+  - `.venv/bin/python`; `--verbose --player 1 [--games N]` written to a log file.
+  - A grep table for each scenario. Every pattern was checked against real log messages.
+  - Points to `ocr-investigator` for full diagnoses, and to ISSUES.md for known bugs.
+  - Fixes ISSUE-010.
+- `.claude/skills/debug-video/inspect_frames.py` (new) - replaces the broken inline snippets.
+  - For each timestamp it saves the frame and both damage-ROI crops, and prints frame type, GO!/GAME!, raw and parsed OCR per player, and scene class.
+  - A script rather than `python -c`, so it can be run and kept correct.
+- `.claude/skills/analyze/SKILL.md` - rewritten.
+  - `.venv/bin/python`; asks the user for `--player` when it isn't given; adds `--games`.
+  - Correct cache path, and an accurate list of what the pipeline does.
+  - Warns about ISSUE-005, ISSUE-009 and ISSUE-013 when presenting results.
+  - Fixes ISSUE-012.
+
+*Verification (both commands run, not just read):*
+- `inspect_frames.py nmzdyQz6msI 88.5 98.0` ran in about 10s. At 98.0s it reproduced ISSUE-001 exactly: P1 raw `'gleeb glob'`, parsed 61.0.
+- `analyze nmzdyQz6msI --player 1 --games 1 --verbose` exited 0 in 4m47s and logged 1,102 OCR lines.
+- Every grep pattern in the skill matched the log, except the original characters pattern. That one hit 2,184 lines, almost all "No Gemini API key" warnings, so it was replaced with `Title hints\|falling back to template`, which matches 6.
+- The same run named Steve vs Palutena as "Little Mac vs Zero Suit Samus", which led to ISSUE-013.
 
 ---
 
