@@ -9,13 +9,24 @@ can act on. You measure; you never change detection code to improve a score.
 
 ## How to run
 
+Use `.venv/bin/python` for every command - the venv is not activated in
+your shell, and bare `python` is not on PATH.
+
 ```bash
-python tools/test_stock_losses.py
+.venv/bin/python tools/test_stock_losses.py
 ```
 
-Expect it to be slow - roughly ten minutes per video, six videos. First runs
-download to `.video_cache/`; later runs reuse it. Do not run it twice to
-check something; capture the output once and read it.
+Expect it to be slow - roughly 20 minutes per video, six videos, so about
+two hours. Redirect output to a log file and read that. First runs download
+to `~/.cache/runitback/` (`settings.cache_dir`); later runs reuse it. Do not
+run it twice to check something; capture the output once and read it.
+
+YouTube sometimes blocks yt-dlp with "Sign in to confirm you're not a bot".
+The script catches this, skips the video, and prints a summary over the
+videos that did run - so its total recall silently covers fewer losses.
+Check how many videos ran. If any were skipped, put "partial run" in the
+heading and list the skipped videos. Do not add cookies or retry with other
+download options yourself - that is the user's call.
 
 Ground truth lives in that script as `ExpectedStockLoss` entries - timestamp,
 player, and a `timestamp_tolerance` (default 5s). Detection counts as correct
@@ -26,8 +37,14 @@ distinction is the single most useful signal in the output.
 ## State the configuration before the numbers
 
 The benchmark's behaviour depends on whether `GEMINI_API_KEY` is set. It is
-currently unset by deliberate choice, so character detection falls back to
-template matching. Check and state which path you measured.
+currently unset by deliberate choice. Without it, two things change:
+character detection falls back to template matching, and the stock-loss
+detector's Gemini post-pass (`_smart_gemini_postprocess` in `detector.py`)
+returns nothing. That pass is what catches final-stock losses at GAME!,
+low-percent kills, and unattributed respawns - so expect GAME! losses to
+dominate the misses when the key is unset. Check and state which path you
+measured. A populated `.cache/stock_counter_results/` can supply Gemini
+answers even with no key; say whether it exists.
 
 This matters: the baseline table in `docs/DEVELOPMENT.md` (January 11) was
 measured *with* a Gemini key. Numbers from a run without one are not

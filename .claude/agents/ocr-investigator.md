@@ -18,27 +18,49 @@ before the timestamp carry the evidence.
 
 ## How to look
 
+Use `.venv/bin/python` for every command - the venv is not activated in
+your shell, and bare `python` is not on PATH.
+
 Per-frame OCR lines are `logger.debug`, so they are invisible at default
-verbosity. Run with `--debug` or they will not appear:
+verbosity. `--verbose` (`-v`) is what raises the log level to DEBUG; there is
+no `--debug` flag. Always pass `--player` - without it `analyze` stops to
+prompt, and you cannot answer. Capture to a file and grep it; do not page:
 
 ```bash
-python -m runitback analyze "<url>" --debug 2>&1 | less
+.venv/bin/python -m runitback analyze "<url>" --player 1 --verbose > debug_frames/run.log 2>&1
+grep -n "OCR detected" debug_frames/run.log
 ```
+
+Use `--games N` to restrict the run to the game containing the timestamp.
 
 `ocr.py:190` logs `OCR detected: '<text>' (conf: <n>)` per call. That is the
 record of what OCR actually read.
 
-To inspect specific frames, extract them and write them to `debug_frames/`
-(gitignored), then read the images directly to see what was on screen. Use
-`.claude/skills/debug-video/SKILL.md` as a reference for the
-extraction snippets - they are already written.
+To inspect specific frames, extract them to `debug_frames/` (gitignored),
+then read the images directly to see what was on screen:
 
-Videos cache in `.video_cache/`, so a second run on the same video is fast.
+```bash
+.venv/bin/python -c "
+import cv2
+from runitback.config import settings
+from runitback.video.downloader import download_video
+from runitback.video.frame_extractor import extract_single_frame
+p = download_video('<url>', settings.cache_dir)
+for t in [<t1>, <t2>, ...]:
+    cv2.imwrite(f'debug_frames/{t:.1f}s.png', extract_single_frame(p, t).image)
+"
+```
+
+Do not copy the snippets in `.claude/skills/debug-video/SKILL.md` - they
+use a `FrameExtractor` class that no longer exists.
+
+Videos cache in `settings.cache_dir` (`~/.cache/runitback/`), so a second
+run on the same video is fast.
 Say so if a download is the slow part.
 
 ## Known failure modes - check these before theorizing
 
-From the January 11 investigation (`docs/DEVELOPMENT.md`):
+Modes 1-4 are from the January 11 investigation (`docs/DEVELOPMENT.md`):
 
 1. **OCR misreads under visual effects.** Steve's mining blocks and particles
    overlap the damage HUD; `13%` has been read as `113%`. Any damage value
@@ -52,13 +74,21 @@ From the January 11 investigation (`docs/DEVELOPMENT.md`):
 4. **Player attribution flips.** Deaths detected at the right time but
    credited to the wrong player. Downstream of 1 and 2: accumulated OCR error
    in max-damage tracking.
+5. **Player tags read as damage.** Found October 23 (Steve vs Palutena, 1:39).
+   The damage ROIs (`ui_detector.py:74-75`) extend to y=0.98 and take in the
+   player tag under each number. The parser's letter-to-digit substitutions
+   (`ocr.py:125-127`: O->0, L->1, B->8, G->6) turn a tag into a number, e.g.
+   "gleeb glob" -> 61, "rohan" -> 0. A phantom 0 fakes a reset; a phantom
+   non-zero blocks the `< 20` respawn check. Look at the raw OCR text for
+   letters, not just the parsed value. Merged decimals (`118.9` read as
+   `1189`) are dropped as > 999, so real high damage can go unread.
 
 ## What to report
 
 - The OCR readings across the window, as a small table: timestamp, P1 read,
   P2 read, confidence
 - What was actually on screen at the frames that matter, from looking at them
-- Which of the four known modes this is, or clearly state it is a new one
+- Which of the known modes this is, or clearly state it is a new one
 - The specific line or variable implicated, as `file.py:line`
 - One sentence on what would fix it - a suggestion, not a patch
 

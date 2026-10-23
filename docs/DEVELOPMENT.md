@@ -8,6 +8,74 @@ This document chronicles the development process for RunItBack, including method
 
 ## Changelog
 
+### October 23, 2026 - Agent Test Run, Prompt Fixes & /log-changes Skill
+
+**Session Goal:** Test the three read-only agents added in `3243123` on real work, fix what they got wrong, and add a way to keep this changelog current.
+
+**Problem:**
+- The agent prompts were written without being run. Running them showed commands that could not work:
+  - `ocr-investigator` told the agent to use `analyze --debug`. There is no such flag; `--verbose` sets DEBUG (`cli.py:810`).
+  - It omitted `--player`, so `analyze` stops to prompt and a subagent cannot answer.
+  - It pointed at the extraction snippets in `debug-video/SKILL.md`, which import a `FrameExtractor` class that does not exist and call `download_video` without its required `cache_dir`.
+  - All three agents ran bare `python`, which is not on PATH; the project venv is `.venv/` and is not activated in subagent shells.
+  - Two agents said videos cache in `.video_cache/`. The pipeline actually caches in `settings.cache_dir` (`~/.cache/runitback/`).
+- `benchmark-runner` assumed about 10 minutes per video; the real figure was about 20.
+- `benchmark-runner` assumed turning Gemini off only affects character detection. It also disables `_smart_gemini_postprocess` in `detector.py`, which catches final-stock GAME! losses and low-percent kills.
+- The script also skips videos YouTube refuses to serve, and still prints a total, so a partial run can look complete.
+- CLAUDE.md said `RUNITBACK_USE_GEMINI` was never implemented, but `character_detector.py:23` reads it.
+
+**Changes:**
+- `.claude/agents/ocr-investigator.md`:
+  - Corrected the run command: `--verbose`, `--player 1`, output to a log file.
+  - Added a working frame-extraction snippet (`extract_single_frame`) and a note not to copy the broken skill snippets.
+  - Corrected the cache path and the interpreter.
+  - Added known failure mode 5, "player tags read as damage", from this session's diagnosis (below).
+- `.claude/agents/benchmark-runner.md`:
+  - Runtime estimate is now about 20 minutes per video.
+  - Explains what Gemini-off does to stock-loss detection.
+  - Requires partial runs to be labelled as partial, with the skipped videos listed.
+  - Corrected the interpreter and cache path.
+- `.claude/agents/label-auditor.md` - Corrected the interpreter.
+- `.claude/skills/log-changes/SKILL.md` (new): writes a dated Changelog entry, what changed and why, then prints a rundown.
+  - It is a skill, not an agent. The "why" lives in the conversation, and a subagent starts with a blank context, so it would only see the diff.
+- `CLAUDE.md`:
+  - Lists `/log-changes`, with an instruction to run it before committing.
+  - Corrected the `RUNITBACK_USE_GEMINI` statement.
+  - States that Gemini-off also disables the stock-loss post-pass.
+  - Corrects the cache description: two caches, `.video_cache/` for labeling tools and `~/.cache/runitback/` for the pipeline.
+
+**Results (agent test runs, Gemini off):**
+- **label-auditor** - Worked as briefed.
+  - Corpus is one video (`XUkRx6CpL04`, 645s labeled). `respawning` is about 63 estimated frames, far under the ~200 floor.
+  - 7 of 11 classes are under 200 frames; `both_knocked_down` has none.
+  - Verdict: label 3-5 more varied videos before retraining.
+- **ocr-investigator** - Steve vs Palutena, P1 death at 1:39. Detected at the right time but credited to P2 (mode 4). The root cause is new:
+  - The damage ROIs (`ui_detector.py:74-75`, down to y=0.98) include the player tag under each number.
+  - The parser's letter-to-digit substitutions (`ocr.py:125-127`) turn "gleeb glob" into 61 and "rohan" into 0.
+  - The phantom 0 faked a P2 reset at 86s, which started a cooldown that hid P2's real death at about 89s.
+  - The phantom 61 failed P1's `< 20` respawn check at 100.5s, so the stale P2 max (113) took the credit.
+  - Merged decimals (`118.9` read as `1189`) are dropped as over 999.
+- **benchmark-runner** - Partial run, 4 of 6 videos. YouTube's "confirm you're not a bot" check blocked Cloud vs Pit and Mario vs Ness.
+
+  | Video | Recall | FP |
+  |-------|--------|----|
+  | Ken vs King Dedede | 100% (8/8) | 0 |
+  | Ken vs Sonic | 77% (10/13) | 4 |
+  | Dark Pit vs Ken | 83% (15/18) | 4 |
+  | Steve vs Palutena | 52% (12/23) | 15 |
+  | **4-video total** | **72.6% (45/62)** | **23** |
+
+  - Not comparable to the January 11 table, which was measured with a Gemini key.
+  - 9 of the 17 misses are final-stock GAME! losses, consistent with the Gemini post-pass being off.
+  - 2 misses are right-time-wrong-player (Steve vs Palutena 1:39 and 2:09).
+
+**Left Open:**
+- The tag-as-damage OCR bug is diagnosed, not fixed. Suggested fix: end the damage ROIs above the tag line, or reject OCR text with no real digits; parse `1189` as 118.9 instead of dropping it.
+- `.claude/skills/debug-video/SKILL.md` still uses `--debug` and the nonexistent `FrameExtractor`.
+- Benchmark downloads need yt-dlp cookies (`--cookies-from-browser`) to get past YouTube's bot check for the two uncached videos.
+
+---
+
 ### January 11, 2026 - Stock Loss Detection Investigation
 
 **Session Goal:** Investigate and improve stock loss detection accuracy

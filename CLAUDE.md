@@ -127,10 +127,13 @@ Character detection uses Google's Gemini Vision API (gemini-2.5-flash) for accur
   `os.environ` at each call site - it is NOT a `Settings` field, so a `.env`
   entry will be silently ignored (`config.py` uses the `RUNITBACK_` prefix).
 - **Disable Gemini**: Leave `GEMINI_API_KEY` unset. Detection logs a warning
-  and falls back to template matching. (There is no `RUNITBACK_USE_GEMINI`
-  switch - that was documented but never implemented.)
+  and falls back to template matching. `RUNITBACK_USE_GEMINI=0` also exists,
+  but only `character_detector.py:23` reads it - it does not turn off the
+  stock-loss or stage Gemini calls.
 - **Current state**: No key is configured. Gemini-dependent paths are inactive,
-  so character detection runs on template matching only.
+  so character detection runs on template matching only, and the stock-loss
+  Gemini post-pass (final-stock GAME! losses, low-percent kills) is off -
+  expect GAME! losses to make up most stock-loss misses.
 - **Cache Location**: `.cache/` directory (relative to project root)
   - `llm_results/` - Character detection cache
   - `stage_results/` - Stage detection cache
@@ -140,7 +143,12 @@ Character detection uses Google's Gemini Vision API (gemini-2.5-flash) for accur
 
 Cache directories are excluded from git (see `.gitignore`):
 - `.cache/` - Gemini API results (~6 MB, speeds up re-analysis)
-- `.video_cache/` - Downloaded YouTube videos (can be large)
+- `.video_cache/` - Videos for the labeling tools (`scene_labeler.py`,
+  `extract_labeled_frames.py`)
+
+The analysis pipeline and the benchmark download elsewhere: `settings.cache_dir`,
+default `~/.cache/runitback/`, outside the repo. Files there are named by URL
+hash, so the two caches do not share videos.
 
 ### Key Files
 
@@ -185,6 +193,11 @@ Custom Claude Code skills for common development tasks:
 | `/test` | Run the pytest test suite with options for quick/full/pattern matching |
 | `/analyze <url>` | Analyze a YouTube SSBU replay video |
 | `/debug-video <url>` | Debug detection on a video with verbose logging and frame extraction |
+| `/log-changes` | Add a dated entry to the `docs/DEVELOPMENT.md` Changelog: what was modified and why |
+
+**After finishing any change to code, config, or tooling, run `/log-changes`
+before committing**, so the DEVELOPMENT.md entry lands in the same commit as
+the change it describes.
 
 Skills are defined in `.claude/skills/<name>/SKILL.md`, each with YAML frontmatter (`name`, `description`). The directory-plus-`SKILL.md` layout is required — a flat `.claude/skills/<name>.md` file is not discovered.
 

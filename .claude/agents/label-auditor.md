@@ -30,7 +30,8 @@ frames each class will yield by simulating the extractor:
 3. if padded_end <= padded_start, the segment yields exactly 1 frame
 4. otherwise step from padded_start by interval while t < padded_end
 
-Write a short script to do this. Do not estimate by hand.
+Write a short script to do this, run with `.venv/bin/python` (bare `python`
+is not on PATH). Do not estimate by hand.
 
 ## What to report
 
