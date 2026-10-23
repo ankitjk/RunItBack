@@ -127,9 +127,9 @@ PREFIX_TO_TYPE = {
 }
 
 
-from typing import Optional
 
-def get_character_internal_name(folder_name: str) -> Optional[str]:
+
+def get_character_internal_name(folder_name: str) -> str | None:
     """Extract internal character name from folder contents."""
     folder_path = SOURCE_DIR / folder_name
     if not folder_path.exists():

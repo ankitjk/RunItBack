@@ -12,7 +12,6 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -108,12 +107,13 @@ class CharacterTemplate:
     image: np.ndarray
     histogram: np.ndarray
     reference_type: str  # "loading_screen", "icon", or "stock_icon"
+    mask: np.ndarray | None = None
 
 
 class CharacterTemplateDatabase:
     """Database of character reference templates for matching."""
 
-    def __init__(self, reference_dir: Optional[Path] = None):
+    def __init__(self, reference_dir: Path | None = None):
         """Initialize the template database.
 
         Args:
@@ -167,7 +167,7 @@ class CharacterTemplateDatabase:
         logger.info(f"Loaded {count} character templates for {len(self.templates)} characters")
         return count
 
-    def _filename_to_character_name(self, filename: str) -> Optional[str]:
+    def _filename_to_character_name(self, filename: str) -> str | None:
         """Convert filename to character name.
 
         Handles formats like:
@@ -219,7 +219,7 @@ class CharacterTemplateDatabase:
 
     def _load_template(
         self, path: Path, char_name: str, ref_type: str
-    ) -> Optional[CharacterTemplate]:
+    ) -> CharacterTemplate | None:
         """Load a single template from file.
 
         Args:
@@ -268,9 +268,8 @@ class CharacterTemplateDatabase:
                 image=image,
                 histogram=histogram,
                 reference_type=ref_type,
+                mask=mask,
             )
-            # Store mask as extra attribute
-            template.mask = mask
             return template
         except Exception as e:
             logger.warning(f"Error loading template {path}: {e}")
@@ -318,7 +317,7 @@ class CharacterTemplateDatabase:
 
 
 # Global template database instance
-_template_db: Optional[CharacterTemplateDatabase] = None
+_template_db: CharacterTemplateDatabase | None = None
 
 
 def get_template_database() -> CharacterTemplateDatabase:
@@ -431,7 +430,7 @@ def match_stock_icon(
 
     # Create circular mask
     mask = np.zeros((h, w), dtype=np.uint8)
-    cv2.circle(mask, (center_x, center_y), radius, 255, -1)
+    cv2.circle(mask, (center_x, center_y), radius, 255, -1)  # type: ignore[call-overload]  # OpenCV stubs
 
     # Use template's alpha mask if available, otherwise use circular mask
     template_mask = getattr(template, 'mask', None)
@@ -692,7 +691,7 @@ def match_template_features(roi: np.ndarray, template: CharacterTemplate) -> flo
     template_gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
 
     # Create ORB detector
-    orb = cv2.ORB_create(nfeatures=100)
+    orb = cv2.ORB_create(nfeatures=100)  # type: ignore[attr-defined]  # exists at runtime, missing from stubs
 
     # Find keypoints and descriptors
     kp1, des1 = orb.detectAndCompute(roi_gray, None)
@@ -995,9 +994,9 @@ def match_template_hybrid(
     return combined
 
 
-def detect_character_from_portrait(
+def match_portrait(
     portrait: np.ndarray,
-    templates: Optional[list[CharacterTemplate]] = None,
+    templates: list[CharacterTemplate] | None = None,
     matching_mode: str = "combined",
 ) -> CharacterDetection:
     """Detect character from a portrait image.
@@ -1079,7 +1078,7 @@ def is_loading_screen(frame: np.ndarray) -> bool:
 
     # Loading screens have relatively low edge density in center
     # (just VS text, not gameplay)
-    return edge_density < 0.1
+    return bool(edge_density < 0.1)
 
 
 def detect_characters(
@@ -1110,8 +1109,8 @@ def detect_characters(
     if not templates:
         templates = db.get_all_templates()
 
-    p1_detection = detect_character_from_portrait(p1_roi, templates)
-    p2_detection = detect_character_from_portrait(p2_roi, templates)
+    p1_detection = match_portrait(p1_roi, templates)
+    p2_detection = match_portrait(p2_roi, templates)
 
     return MatchCharacters(player1=p1_detection, player2=p2_detection)
 
@@ -1207,8 +1206,8 @@ def detect_character_from_portrait(
 def detect_characters_from_frames(
     frames: list[np.ndarray],
     sample_positions: tuple[float, ...] = (0.10, 0.25, 0.50, 0.75, 0.90),
-    p1_hints: Optional[list[str]] = None,
-    p2_hints: Optional[list[str]] = None,
+    p1_hints: list[str] | None = None,
+    p2_hints: list[str] | None = None,
 ) -> MatchCharacters:
     """Detect characters from frames using Gemini Vision API.
 
@@ -1320,7 +1319,7 @@ def _detect_characters_template_matching(
         if not char_scores:
             return CharacterDetection(name="Unknown", confidence=0.0)
 
-        best_name = max(char_scores, key=char_scores.get)
+        best_name = max(char_scores, key=lambda c: char_scores[c])
         # Average confidence across samples
         avg_conf = char_scores[best_name] / num_samples
         return CharacterDetection(name=best_name, confidence=avg_conf)
@@ -1345,7 +1344,7 @@ def add_character_reference(
     image_path: Path,
     character_name: str,
     reference_type: str,
-    reference_dir: Optional[Path] = None,
+    reference_dir: Path | None = None,
 ) -> bool:
     """Add a character reference image to the database.
 

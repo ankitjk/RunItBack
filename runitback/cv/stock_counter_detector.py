@@ -15,7 +15,6 @@ Detection methods:
 """
 
 import logging
-from typing import Optional
 
 import numpy as np
 
@@ -24,9 +23,9 @@ logger = logging.getLogger(__name__)
 
 def detect_stock_counter_gemini(
     frame: np.ndarray,
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
     use_cache: bool = True,
-) -> tuple[bool, Optional[int], Optional[int], bool]:
+) -> tuple[bool, int | None, int | None, bool]:
     """Detect stock counter splash using Gemini Vision API.
 
     This is the primary detection method - more reliable than OCR
@@ -83,8 +82,8 @@ class StockCounterTracker:
             use_gemini: Whether to use Gemini API (recommended for accuracy)
         """
         self.use_gemini = use_gemini
-        self.last_p1_stocks: Optional[int] = None
-        self.last_p2_stocks: Optional[int] = None
+        self.last_p1_stocks: int | None = None
+        self.last_p2_stocks: int | None = None
         self.last_detection_time: float = 0.0
         self.detection_cooldown: float = 3.0  # Minimum seconds between checks
 
@@ -92,8 +91,8 @@ class StockCounterTracker:
         self,
         frame: np.ndarray,
         timestamp: float,
-        api_key: Optional[str] = None,
-    ) -> tuple[bool, bool, Optional[int], Optional[int], bool]:
+        api_key: str | None = None,
+    ) -> tuple[bool, bool, int | None, int | None, bool]:
         """Process a frame and detect stock changes.
 
         Args:

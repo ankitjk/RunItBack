@@ -61,7 +61,10 @@ def download_video(
 
     # Configure yt-dlp options
     ydl_opts = {
-        "format": f"bestvideo[height<={max_height}][ext=mp4]+bestaudio[ext=m4a]/best[height<={max_height}][ext=mp4]/best",
+        "format": (
+            f"bestvideo[height<={max_height}][ext=mp4]+bestaudio[ext=m4a]"
+            f"/best[height<={max_height}][ext=mp4]/best"
+        ),
         "outtmpl": str(cache_path),
         "quiet": True,
         "no_warnings": True,

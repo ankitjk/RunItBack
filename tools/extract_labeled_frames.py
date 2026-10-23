@@ -28,7 +28,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
-import numpy as np
 
 # Scene classes (must match scene_labeler.py)
 SCENE_CLASSES = [
@@ -137,7 +136,6 @@ def extract_frames_from_video(
 
     for game in labels.get("games", []):
         game_num = game.get("game_number", 1)
-        stage = game.get("stage", "unknown")
 
         for label in game.get("labels", []):
             scene_class = label.get("scene_class", label.get("class"))

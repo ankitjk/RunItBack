@@ -30,7 +30,7 @@ Usage:
 import ast
 import re
 import sys
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -71,7 +71,7 @@ def code_lines(text: str) -> list[tuple[int, str]]:
     return lines
 
 
-@lru_cache(maxsize=None)
+@cache
 def cli_commands() -> dict[str, set[str]]:
     """Real `runitback` subcommands and their option strings, from the CLI itself."""
     import typer.main
@@ -86,7 +86,7 @@ def cli_commands() -> dict[str, set[str]]:
     }
 
 
-@lru_cache(maxsize=None)
+@cache
 def module_names(module: str) -> set[str] | None:
     """Top-level names a runitback module defines, or None if it does not exist."""
     base = ROOT / Path(*module.split("."))
@@ -111,7 +111,7 @@ def module_names(module: str) -> set[str] | None:
     return names
 
 
-@lru_cache(maxsize=None)
+@cache
 def resolve(ref: str) -> list[Path]:
     """Files a reference could mean: an exact repo path, else a unique basename."""
     if "/" in ref:
@@ -120,7 +120,7 @@ def resolve(ref: str) -> list[Path]:
     return [p for d in SEARCH_DIRS for p in (ROOT / d).rglob(ref) if ".venv" not in p.parts]
 
 
-@lru_cache(maxsize=None)
+@cache
 def line_count(path: Path) -> int:
     return len(path.read_text(errors="replace").splitlines())
 

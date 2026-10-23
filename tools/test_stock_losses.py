@@ -15,13 +15,12 @@ if "GEMINI_API_KEY" not in os.environ:
     print()
 
 from dataclasses import dataclass
-from typing import Optional
 
-from runitback.video.downloader import download_video, get_video_info, extract_characters_from_title
-from runitback.video.frame_extractor import extract_frames
-from runitback.cli import detect_games
 from runitback.classification.detector import GameStateDetector
+from runitback.cli import detect_games
 from runitback.config import settings
+from runitback.video.downloader import download_video, extract_characters_from_title, get_video_info
+from runitback.video.frame_extractor import extract_frames
 
 
 @dataclass
@@ -483,7 +482,10 @@ def main():
     print("\nPer-video breakdown:")
     for r in all_results:
         video_recall = r["total_matched"] / r["total_expected"] * 100 if r["total_expected"] > 0 else 0
-        print(f"  {r['video_id']}: {r['total_matched']}/{r['total_expected']} matched ({video_recall:.0f}%), {r['total_false_positives']} FP")
+        print(
+            f"  {r['video_id']}: {r['total_matched']}/{r['total_expected']} matched "
+            f"({video_recall:.0f}%), {r['total_false_positives']} FP"
+        )
 
 
 if __name__ == "__main__":

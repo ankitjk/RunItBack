@@ -87,7 +87,10 @@ def main():
 
             mins = int(check_ts // 60)
             secs = check_ts % 60
-            print(f"  {mins}:{secs:05.2f} ({check_ts:6.1f}s): {result.state.value:18s} {result.confidence:5.1%}{highlight}{marker}")
+            print(
+                f"  {mins}:{secs:05.2f} ({check_ts:6.1f}s): "
+                f"{result.state.value:18s} {result.confidence:5.1%}{highlight}{marker}"
+            )
 
     print("\n" + "="*80)
     print("RESPAWN DETECTION SUMMARY")
@@ -113,7 +116,7 @@ def main():
                 break
 
         if not respawn_found:
-            print(f"  NO RESPAWN DETECTED within 5s - MAY BE FALSE POSITIVE!")
+            print("  NO RESPAWN DETECTED within 5s - MAY BE FALSE POSITIVE!")
 
 
 if __name__ == "__main__":

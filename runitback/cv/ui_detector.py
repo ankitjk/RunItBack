@@ -6,7 +6,7 @@ Detects damage percentages, stock counts, and game boundaries from the game's HU
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -29,7 +29,7 @@ class FrameType(Enum):
 class PlayerUIState:
     """UI state for a single player."""
 
-    damage: Optional[float]
+    damage: float | None
     stocks: int
     damage_confidence: float
 
@@ -143,7 +143,7 @@ def detect_character_icon(frame: np.ndarray, player: int) -> bool:
     has_color = sat_mean > 40 and val_mean > 60
     has_detail = 0.05 < edge_ratio < 0.35
 
-    return has_color and has_detail
+    return bool(has_color and has_detail)
 
 
 def detect_stock_icon(frame: np.ndarray, player: int) -> bool:
@@ -174,7 +174,7 @@ def detect_stock_icon(frame: np.ndarray, player: int) -> bool:
     bright_pixels = np.sum(gray > brightness_threshold) / gray.size
 
     # If more than 5% of the stock region has bright pixels, stocks are present
-    return bright_pixels > 0.05
+    return bool(bright_pixels > 0.05)
 
 
 def detect_damage_display(frame: np.ndarray, player: int) -> bool:
@@ -210,7 +210,7 @@ def detect_damage_display(frame: np.ndarray, player: int) -> bool:
     has_bright_text = bright_pixels > 0.03
     has_contrast = std_dev > 30
 
-    return has_bright_text and has_contrast
+    return bool(has_bright_text and has_contrast)
 
 
 def count_stocks(
@@ -305,7 +305,7 @@ def detect_ui_state(
 
 def detect_game_boundary(
     current: UIState,
-    previous: Optional[UIState],
+    previous: UIState | None,
     starting_stocks: int = 3,
 ) -> bool:
     """Detect if a new game has started between two UI states.
@@ -465,7 +465,6 @@ def detect_game_end_screen(frame: np.ndarray) -> bool:
 
 
 # Template paths for GO! and GAME! detection
-from pathlib import Path
 
 _GO_TEMPLATE: np.ndarray | None = None
 _GAME_TEMPLATE: np.ndarray | None = None

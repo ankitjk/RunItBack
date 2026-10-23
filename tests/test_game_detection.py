@@ -11,9 +11,9 @@ several minutes to run. They are marked as slow tests.
 Test data is based on actual tournament footage with known game/stage data.
 """
 
-import pytest
 from dataclasses import dataclass
-from typing import Optional
+
+import pytest
 
 
 @dataclass
@@ -32,9 +32,9 @@ class ExpectedGame:
     stage: str
     start_time: tuple[int, int]  # (minutes, seconds)
     end_time: tuple[int, int]  # (minutes, seconds)
-    player1_character: Optional[str] = None  # Player 1 character name
-    player2_character: Optional[str] = None  # Player 2 character name
-    stock_losses: Optional[list[ExpectedStockLoss]] = None  # Expected stock losses
+    player1_character: str | None = None  # Player 1 character name
+    player2_character: str | None = None  # Player 2 character name
+    stock_losses: list[ExpectedStockLoss] | None = None  # Expected stock losses
     # Tolerance for timestamp matching (seconds)
     timestamp_tolerance: int = 30
 
@@ -436,10 +436,10 @@ class TestGameDetection:
     @pytest.mark.parametrize("test_video", TEST_VIDEOS, ids=lambda v: v.video_id)
     def test_game_count(self, test_video: TestVideo):
         """Test that the correct number of games is detected."""
-        from runitback.video.downloader import download_video
-        from runitback.video.frame_extractor import extract_frames
         from runitback.cli import detect_games
         from runitback.config import settings
+        from runitback.video.downloader import download_video
+        from runitback.video.frame_extractor import extract_frames
 
         # Download video
         video_path = download_video(test_video.url, cache_dir=settings.cache_dir)
@@ -459,10 +459,10 @@ class TestGameDetection:
     @pytest.mark.parametrize("test_video", TEST_VIDEOS, ids=lambda v: v.video_id)
     def test_stage_detection(self, test_video: TestVideo):
         """Test that stages are correctly detected for each game."""
-        from runitback.video.downloader import download_video
-        from runitback.video.frame_extractor import extract_frames
         from runitback.cli import detect_games
         from runitback.config import settings
+        from runitback.video.downloader import download_video
+        from runitback.video.frame_extractor import extract_frames
 
         # Download video
         video_path = download_video(test_video.url, cache_dir=settings.cache_dir)
@@ -483,10 +483,10 @@ class TestGameDetection:
     @pytest.mark.parametrize("test_video", TEST_VIDEOS, ids=lambda v: v.video_id)
     def test_timestamp_accuracy(self, test_video: TestVideo):
         """Test that game timestamps are within tolerance of expected values."""
-        from runitback.video.downloader import download_video
-        from runitback.video.frame_extractor import extract_frames
         from runitback.cli import detect_games
         from runitback.config import settings
+        from runitback.video.downloader import download_video
+        from runitback.video.frame_extractor import extract_frames
 
         # Download video
         video_path = download_video(test_video.url, cache_dir=settings.cache_dir)
@@ -520,13 +520,17 @@ class TestGameDetection:
 
 
     @pytest.mark.slow
-    @pytest.mark.parametrize("test_video", [v for v in TEST_VIDEOS if v.expected_games[0].player1_character], ids=lambda v: v.video_id)
+    @pytest.mark.parametrize(
+        "test_video",
+        [v for v in TEST_VIDEOS if v.expected_games[0].player1_character],
+        ids=lambda v: v.video_id,
+    )
     def test_character_detection(self, test_video: TestVideo):
         """Test that characters are correctly detected for each game."""
-        from runitback.video.downloader import download_video, get_video_info, extract_characters_from_title
-        from runitback.video.frame_extractor import extract_frames
         from runitback.cli import detect_games
         from runitback.config import settings
+        from runitback.video.downloader import download_video, extract_characters_from_title, get_video_info
+        from runitback.video.frame_extractor import extract_frames
 
         # Download video
         video_path = download_video(test_video.url, cache_dir=settings.cache_dir)
@@ -562,9 +566,6 @@ class TestStageDetection:
 
     def test_battlefield_vs_small_battlefield_disambiguation(self):
         """Test that platform counting distinguishes Battlefield from Small Battlefield."""
-        from runitback.cv.stage_detector import detect_platform_count
-        import cv2
-        import numpy as np
 
         # This would require actual test images - placeholder for now
         # TODO: Add test images for stage detection
@@ -581,10 +582,10 @@ class TestStockLossDetection:
     @pytest.mark.parametrize("test_video", VIDEOS_WITH_STOCK_DATA, ids=lambda v: v.video_id)
     def test_stock_counter_detection(self, test_video: TestVideo):
         """Test that stock counter splash screens are correctly detected."""
+        from runitback.config import settings
+        from runitback.cv.llm_detector import detect_stock_counter_with_gemini
         from runitback.video.downloader import download_video
         from runitback.video.frame_extractor import extract_frames
-        from runitback.cv.llm_detector import detect_stock_counter_with_gemini
-        from runitback.config import settings
 
         # Download video
         video_path = download_video(test_video.url, cache_dir=settings.cache_dir)
@@ -639,10 +640,10 @@ class TestStockLossDetection:
     @pytest.mark.slow
     def test_stock_counter_no_false_positives(self):
         """Test that normal gameplay frames don't trigger stock counter detection."""
+        from runitback.config import settings
+        from runitback.cv.llm_detector import detect_stock_counter_with_gemini
         from runitback.video.downloader import download_video
         from runitback.video.frame_extractor import extract_frames
-        from runitback.cv.llm_detector import detect_stock_counter_with_gemini
-        from runitback.config import settings
 
         # Use first test video
         test_video = TEST_VIDEOS[0]

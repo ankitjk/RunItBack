@@ -12,7 +12,6 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -159,7 +158,7 @@ def get_frame_hash(frame: np.ndarray) -> str:
     return hashlib.sha256(small.tobytes()).hexdigest()[:16]
 
 
-def get_cached_result(frame_hash: str) -> Optional[GeminiDetection]:
+def get_cached_result(frame_hash: str) -> GeminiDetection | None:
     """Check if we have a cached result for this frame.
 
     Args:
@@ -217,7 +216,7 @@ def frame_to_base64(frame: np.ndarray) -> str:
 
 def detect_characters_with_gemini(
     frame: np.ndarray,
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
     use_cache: bool = True,
 ) -> GeminiDetection:
     """Detect characters in a SSBU gameplay frame using Gemini Vision.
@@ -356,9 +355,9 @@ IMPORTANT: Do NOT confuse Mario in a green skin with Luigi - check the HUD portr
 def detect_characters_from_frames_gemini(
     frames: list[np.ndarray],
     sample_positions: tuple[float, ...] = (0.05, 0.10, 0.20, 0.35, 0.50, 0.70, 0.90),
-    api_key: Optional[str] = None,
-    p1_hints: Optional[list[str]] = None,
-    p2_hints: Optional[list[str]] = None,
+    api_key: str | None = None,
+    p1_hints: list[str] | None = None,
+    p2_hints: list[str] | None = None,
 ) -> tuple[str, str]:
     """Detect characters from multiple frames using Gemini, with voting.
 
@@ -414,8 +413,8 @@ def detect_characters_from_frames_gemini(
         logger.debug(f"P2 vote totals: {p2_votes}")
 
     # Get winners
-    player1 = max(p1_votes, key=p1_votes.get) if p1_votes else "Unknown"
-    player2 = max(p2_votes, key=p2_votes.get) if p2_votes else "Unknown"
+    player1 = max(p1_votes, key=lambda c: p1_votes[c]) if p1_votes else "Unknown"
+    player2 = max(p2_votes, key=lambda c: p2_votes[c]) if p2_votes else "Unknown"
 
     # Use hints to resolve ambiguous detections
     # Confusion pairs where hints can help
@@ -453,7 +452,10 @@ def detect_characters_from_frames_gemini(
                     # Hint suggests the other character - switch if it has reasonable votes
                     other_pct = votes.get(other_char, 0) / total if total > 0 else 0
                     if other_pct >= 0.2:  # At least 20% of votes
-                        logger.info(f"Applying title hint: {winner} -> {other_char} (hint matched, {other_pct:.0%} votes)")
+                        logger.info(
+                            f"Applying title hint: {winner} -> {other_char} "
+                            f"(hint matched, {other_pct:.0%} votes)"
+                        )
                         return other_char
                 # Check if hint matches winner - boost confidence
                 if winner in hints:
@@ -633,7 +635,7 @@ def normalize_stage_name(name: str) -> str:
 STAGE_CACHE_DIR = Path(__file__).parent.parent.parent / ".cache" / "stage_results"
 
 
-def get_cached_stage_result(frame_hash: str) -> Optional[GeminiStageDetection]:
+def get_cached_stage_result(frame_hash: str) -> GeminiStageDetection | None:
     """Check if we have a cached stage result for this frame."""
     cache_file = STAGE_CACHE_DIR / f"{frame_hash}.txt"
     if cache_file.exists():
@@ -662,7 +664,7 @@ def save_cached_stage_result(frame_hash: str, result: GeminiStageDetection) -> N
 
 def detect_stage_with_gemini(
     frame: np.ndarray,
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
     use_cache: bool = True,
 ) -> GeminiStageDetection:
     """Detect the stage in a SSBU gameplay frame using Gemini Vision.
@@ -797,8 +799,8 @@ Confidence: [high/medium/low]"""
 class GeminiStockCounterDetection:
     """Result of Gemini stock counter detection."""
     detected: bool  # Whether a stock counter splash was visible
-    p1_stocks: Optional[int]  # Player 1's stock count (0-3)
-    p2_stocks: Optional[int]  # Player 2's stock count (0-3)
+    p1_stocks: int | None  # Player 1's stock count (0-3)
+    p2_stocks: int | None  # Player 2's stock count (0-3)
     is_game_end: bool  # True if "GAME!" screen was shown
     confidence: str  # "high", "medium", "low"
     raw_response: str
@@ -808,7 +810,7 @@ class GeminiStockCounterDetection:
 STOCK_COUNTER_CACHE_DIR = Path(__file__).parent.parent.parent / ".cache" / "stock_counter_results"
 
 
-def get_cached_stock_counter_result(frame_hash: str) -> Optional[GeminiStockCounterDetection]:
+def get_cached_stock_counter_result(frame_hash: str) -> GeminiStockCounterDetection | None:
     """Check if we have a cached stock counter result for this frame."""
     cache_file = STOCK_COUNTER_CACHE_DIR / f"{frame_hash}.txt"
     if cache_file.exists():
@@ -843,7 +845,7 @@ def save_cached_stock_counter_result(frame_hash: str, result: GeminiStockCounter
 
 def detect_stock_counter_with_gemini(
     frame: np.ndarray,
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
     use_cache: bool = True,
 ) -> GeminiStockCounterDetection:
     """Detect stock counter splash screen using Gemini Vision.
@@ -1006,7 +1008,7 @@ Confidence: [high/medium/low]"""
 def detect_stage_from_frames_gemini(
     frames: list[np.ndarray],
     sample_positions: tuple[float, ...] = (0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.60),
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
 ) -> str:
     """Detect stage from multiple frames using Gemini, with voting.
 
@@ -1055,7 +1057,7 @@ def detect_stage_from_frames_gemini(
     if not stage_votes:
         return "Unknown"
 
-    winner = max(stage_votes, key=stage_votes.get)
+    winner = max(stage_votes, key=lambda s: stage_votes[s])
     total = sum(stage_votes.values())
     winner_pct = stage_votes[winner] / total * 100 if total > 0 else 0
 

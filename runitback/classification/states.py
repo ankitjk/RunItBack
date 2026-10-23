@@ -1,8 +1,7 @@
 """Game state enums and data structures."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 
 class GameState(Enum):
@@ -85,7 +84,7 @@ class StateSegment:
     end_time: float
     start_frame: int
     end_frame: int
-    stock_losses: list[StockLoss] = None
+    stock_losses: list[StockLoss] = field(default_factory=list)
     disadvantage_type: DisadvantageType = DisadvantageType.UNKNOWN
 
     def __post_init__(self):
@@ -131,16 +130,16 @@ class FrameState:
 
     timestamp: float
     frame_index: int
-    p1_damage: Optional[float]
-    p2_damage: Optional[float]
-    p1_stocks: Optional[int] = None
-    p2_stocks: Optional[int] = None
+    p1_damage: float | None
+    p2_damage: float | None
+    p1_stocks: int | None = None
+    p2_stocks: int | None = None
     p1_visible: bool = True
     p2_visible: bool = True
     state: GameState = GameState.UNKNOWN
     p1_stock_loss: bool = False
     p2_stock_loss: bool = False
-    scene_state: Optional[str] = None  # SceneState value (avoid circular import)
+    scene_state: str | None = None  # SceneState value (avoid circular import)
     disadvantage_type: DisadvantageType = DisadvantageType.UNKNOWN
 
 

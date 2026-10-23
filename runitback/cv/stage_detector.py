@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 STAGE_REFERENCES_DIR = Path(__file__).parent.parent.parent / "data" / "stage_references"
 
 # Cache for loaded reference histograms
-_reference_histograms: dict[str, np.ndarray] = {}
+_reference_histograms: dict["Stage", list[np.ndarray]] = {}
 
 
 def _get_stage_from_filename(filename: str) -> Optional["Stage"]:
@@ -345,7 +345,7 @@ def compute_dominant_colors(region: np.ndarray, k: int = 3) -> list[tuple[int, i
 
     # Run k-means
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-    _, labels, centers = cv2.kmeans(
+    _, labels, centers = cv2.kmeans(  # type: ignore[call-overload]  # OpenCV stubs reject bestLabels=None
         pixels, k, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS
     )
 
@@ -415,7 +415,6 @@ def has_top_center_platform(frame: np.ndarray) -> bool:
 
     # Method 3: Check for platform-like solid region (the platform has a distinct color)
     # Look for a horizontal band of similar color in the center
-    hsv = cv2.cvtColor(top_center_region, cv2.COLOR_BGR2HSV)
 
     # The Battlefield platform is typically a golden/tan color
     # Check for consistent horizontal bands by looking at row variance
@@ -578,7 +577,7 @@ def detect_stage(
 
     # Find best match
     if scores:
-        best_stage = max(scores, key=scores.get)
+        best_stage = max(scores, key=lambda s: scores[s])
         best_score = scores[best_stage]
 
         if best_score >= confidence_threshold:
@@ -696,7 +695,7 @@ def detect_stage_from_frames(
     logger.debug(f"Stage voting: {vote_summary}")
 
     # Filter out UNKNOWN votes if there are other options
-    non_unknown_votes = {s: v for s, v in stage_votes.items() if s != Stage.UNKNOWN}
+    non_unknown_votes: dict[Stage, list[float]] = {s: v for s, v in stage_votes.items() if s != Stage.UNKNOWN}
     if non_unknown_votes:
         stage_votes = non_unknown_votes
 
@@ -751,7 +750,7 @@ def detect_stage_from_frames(
     return best_stage, avg_confidence
 
 
-def get_stage_geometry(stage: Stage) -> Optional[StageGeometry]:
+def get_stage_geometry(stage: Stage) -> StageGeometry | None:
     """Get the geometry for a stage.
 
     Args:

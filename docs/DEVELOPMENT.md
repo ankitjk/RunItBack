@@ -147,6 +147,30 @@ This document chronicles the development process for RunItBack, including method
 - `pyproject.toml` - filters PaddleOCR's harmless "No ccache found" warning out of test output.
 - ISSUE-014 recorded, found while writing the tests: P1's 118.9% is read as 18.9%, because the leading digit sits on the ROI's left edge.
 
+**Follow-up: lint and type checks pass (part 2 of 3)**
+
+The README told reviewers to run `ruff check .` and `mypy runitback`. Before this, ruff reported 285 findings and mypy did not run at all.
+
+*Changes:*
+- **Ruff - now passes.**
+  - ~120 safe automatic fixes across 24 files: modern `X | None` annotations, import order, unused imports.
+  - Line limit raised from 100 to 120, which left 20 long lines to wrap by hand. Log messages were split into adjacent strings, so the output is identical.
+  - `N806` is ignored: UPPER_CASE tuning constants inside functions (e.g. `STOCK_LOSS_COOLDOWN`) are deliberate and documented by those names.
+  - `llm_detector.py` is exempt from line length, because wrapping the Gemini prompt text would change what Gemini receives.
+  - Dead variables removed, a misplaced import moved, Qt override names marked as allowed.
+- **Real bug found by ruff:** `character_detector.py` defined `detect_character_from_portrait` twice with different parameters. The second definition shadowed the first, so the public `detect_characters()` always raised `TypeError`.
+  - Nothing in the project calls it, so no results were affected.
+  - The first definition is renamed `match_portrait`.
+- **mypy - now runs and passes**, in relaxed mode.
+  - It never ran before: the config targeted Python 3.11, but the installed numpy's stubs use 3.12 syntax.
+  - Fixed: `python_version = "3.12"`, and `ignore_missing_imports` for onnxruntime, yt_dlp and paddleocr.
+  - The 36 relaxed-mode errors are fixed. Most were wrong annotations (`list[int]` holding tuples, numpy `bool_` returned as `bool`, `max(key=d.get)`).
+  - A few matter at runtime: `StateSegment.stock_losses` defaulted to `None` but is `.extend()`ed (now `field(default_factory=list)`), and `CharacterTemplate.mask` was attached after construction (now a declared field).
+  - The scene classifier's guard is made explicit (`self._session is None`), and OpenCV stub gaps get targeted `# type: ignore` comments.
+  - Strict mode (28 remaining) is added to Future Improvements, not ISSUES.md, since these aren't bugs.
+- **Verified:** ruff, mypy, `check_docs.py` and the fast tests all pass. Every `runitback` module imports and every file compiles.
+- **Left open:** the first CI run of `a1def5b` failed at "Fast tests" on Linux, after install and the instruction check passed. The job log needs a GitHub login to read, so the cause is unknown.
+
 ---
 
 ### January 11, 2026 - Stock Loss Detection Investigation
@@ -897,6 +921,7 @@ DISADVANTAGE SEGMENTS:
 3. **Character Position Tracking** - Motion detection + Kalman filter for edgeguard detection
 4. **Slippi Integration** - For Melee replays, read game memory directly
 5. **Stage-specific Ledge Detection** - Use stage geometry data for ledgetrap identification
+6. **Strict type checking** - Turn on mypy `strict = true`. 28 errors remain (October 23, 2026), mostly missing generic parameters (`dict` instead of `dict[str, int]`) and unannotated functions. The real type bugs were already fixed in relaxed mode.
 
 ---
 

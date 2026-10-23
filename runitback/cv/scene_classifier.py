@@ -8,7 +8,6 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -83,7 +82,7 @@ class SceneClassification:
 
     state: SceneState
     confidence: float
-    raw_probabilities: Optional[dict[str, float]] = None
+    raw_probabilities: dict[str, float] | None = None
 
     @property
     def is_confident(self) -> bool:
@@ -126,7 +125,7 @@ class SceneClassifier:
 
     def __init__(
         self,
-        model_path: Optional[Path] = None,
+        model_path: Path | None = None,
         confidence_threshold: float = 0.6,
         temporal_smoothing: int = 5,
     ):
@@ -169,12 +168,13 @@ class SceneClassifier:
 
             for providers in providers_to_try:
                 try:
-                    self._session = ort.InferenceSession(
+                    session = ort.InferenceSession(
                         str(self.model_path),
                         providers=providers,
                     )
+                    self._session = session
                     self._available = True
-                    active_providers = self._session.get_providers()
+                    active_providers = session.get_providers()
                     logger.info(f"Loaded scene classifier from {self.model_path} (providers: {active_providers})")
                     return
                 except Exception as e:
@@ -229,7 +229,7 @@ class SceneClassifier:
         Returns:
             SceneClassification with state, confidence, and probabilities
         """
-        if not self._available:
+        if not self._available or self._session is None:
             return SceneClassification(
                 state=SceneState.UNKNOWN,
                 confidence=0.0,
@@ -289,7 +289,7 @@ class SceneClassifier:
         Returns:
             List of classifications
         """
-        if not self._available:
+        if not self._available or self._session is None:
             return [
                 SceneClassification(state=SceneState.UNKNOWN, confidence=0.0)
                 for _ in frames
@@ -340,7 +340,7 @@ class SceneClassifier:
 
 
 # Singleton instance for convenience
-_classifier: Optional[SceneClassifier] = None
+_classifier: SceneClassifier | None = None
 
 
 def get_scene_classifier() -> SceneClassifier:

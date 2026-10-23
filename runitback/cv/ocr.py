@@ -2,9 +2,7 @@
 
 import logging
 import multiprocessing as mp
-import os
 import re
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -48,7 +46,7 @@ def _init_ocr_worker():
     )
 
 
-def _process_single_roi(args: tuple) -> tuple[int, Optional[float], float]:
+def _process_single_roi(args: tuple) -> tuple[int, float | None, float]:
     """Process a single ROI in a worker process.
 
     Args:
@@ -102,14 +100,14 @@ def preprocess_damage_roi(roi: np.ndarray) -> np.ndarray:
     )
 
     # Add padding around the text
-    padded = cv2.copyMakeBorder(
+    padded = cv2.copyMakeBorder(  # type: ignore[call-overload]  # OpenCV stubs: resize output type
         scaled, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=0
     )
 
     return padded
 
 
-def extract_damage_value(text: str) -> Optional[float]:
+def extract_damage_value(text: str) -> float | None:
     """Extract numeric damage value from OCR text.
 
     Args:
@@ -143,7 +141,7 @@ def extract_damage_value(text: str) -> Optional[float]:
 def read_damage_percentage(
     roi: np.ndarray,
     confidence_threshold: float = 0.3,
-) -> tuple[Optional[float], float]:
+) -> tuple[float | None, float]:
     """Read damage percentage from an image region.
 
     Args:
@@ -201,7 +199,7 @@ def read_damage_percentage(
         return None, 0.0
 
 
-def _read_damage_old_format(results, confidence_threshold: float) -> tuple[Optional[float], float]:
+def _read_damage_old_format(results, confidence_threshold: float) -> tuple[float | None, float]:
     """Handle old PaddleOCR result format for backward compatibility."""
     if not results or not results[0]:
         return None, 0.0
@@ -239,8 +237,8 @@ def _read_damage_old_format(results, confidence_threshold: float) -> tuple[Optio
 
 def read_damage_with_fallback(
     roi: np.ndarray,
-    previous_value: Optional[float] = None,
-) -> Optional[float]:
+    previous_value: float | None = None,
+) -> float | None:
     """Read damage with fallback to previous value on OCR failure.
 
     This helps maintain continuity when OCR temporarily fails.
@@ -276,7 +274,7 @@ def read_damage_batch_parallel(
     rois: list[np.ndarray],
     num_workers: int = DEFAULT_OCR_WORKERS,
     confidence_threshold: float = 0.3,
-) -> list[tuple[Optional[float], float]]:
+) -> list[tuple[float | None, float]]:
     """Read damage percentages from multiple ROIs in parallel.
 
     Uses multiprocessing to distribute OCR across multiple workers.
@@ -298,7 +296,7 @@ def read_damage_batch_parallel(
         return [read_damage_percentage(roi, confidence_threshold) for roi in rois]
 
     # Prepare data for workers - serialize numpy arrays
-    work_items = []
+    work_items: list[tuple[int, bytes | None, tuple[int, ...] | None, np.dtype | None, float]] = []
     for idx, roi in enumerate(rois):
         if roi is None or roi.size == 0:
             work_items.append((idx, None, None, None, confidence_threshold))
@@ -314,7 +312,7 @@ def read_damage_batch_parallel(
     # Use spawn context for macOS compatibility
     ctx = mp.get_context("spawn")
 
-    results = [None] * len(rois)
+    results: list[tuple[float | None, float]] = [(None, 0.0)] * len(rois)
 
     try:
         with ctx.Pool(

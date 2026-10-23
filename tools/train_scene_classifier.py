@@ -18,7 +18,6 @@ Examples:
 import argparse
 import json
 import time
-from datetime import datetime
 from pathlib import Path
 
 import torch
@@ -27,7 +26,7 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
-from torchvision.models import convnext_tiny, ConvNeXt_Tiny_Weights
+from torchvision.models import ConvNeXt_Tiny_Weights, convnext_tiny
 
 # Scene classes (order matters - must match label indices)
 SCENE_CLASSES = [
@@ -272,7 +271,7 @@ def main():
 
     # Verify class order matches
     if train_dataset.classes != SCENE_CLASSES:
-        print(f"Warning: Dataset classes don't match expected order")
+        print("Warning: Dataset classes don't match expected order")
         print(f"  Expected: {SCENE_CLASSES}")
         print(f"  Got: {train_dataset.classes}")
 

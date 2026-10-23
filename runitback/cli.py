@@ -3,36 +3,33 @@
 import logging
 import re
 from dataclasses import dataclass
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.table import Table
 
-from runitback.classification.detector import GameStateDetector, format_analysis_output
+from runitback.classification.detector import GameStateDetector
 from runitback.classification.states import GameState, GameStateAnalysis
 from runitback.config import settings
-from runitback.cv.character_detector import detect_characters_from_frames, MatchCharacters
+from runitback.cv.character_detector import detect_characters_from_frames
 from runitback.cv.stage_detector import Stage
-from runitback.cv.llm_detector import detect_stage_from_frames_gemini
 from runitback.cv.ui_detector import (
-    detect_ui_state,
-    detect_frame_type,
-    detect_go_screen,
-    detect_game_screen,
     FrameType,
     UIState,
+    detect_frame_type,
+    detect_game_screen,
+    detect_go_screen,
 )
 from runitback.utils.logging import setup_logging
 from runitback.video.downloader import (
-    download_video,
     DownloadError,
-    get_video_info,
+    download_video,
     extract_characters_from_title,
+    get_video_info,
 )
-from runitback.video.frame_extractor import extract_frames, Frame, FrameExtractionError
+from runitback.video.frame_extractor import Frame, FrameExtractionError, extract_frames
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +64,7 @@ def validate_youtube_url(url: str) -> bool:
     return any(re.match(pattern, url) for pattern in youtube_patterns)
 
 
-def parse_games_option(games_str: str, total_games: int) -> list[int]:
+def parse_games_option(games_str: str | None, total_games: int) -> list[int]:
     """Parse the --games option string into a list of game numbers.
 
     Supports formats:
@@ -509,7 +506,7 @@ def _apply_character_consistency(games: list[GameInfo]) -> list[GameInfo]:
     def get_dominant(char_counts: dict[str, int], total_games: int) -> str | None:
         if not char_counts:
             return None
-        best_char = max(char_counts, key=char_counts.get)
+        best_char = max(char_counts, key=lambda c: char_counts[c])
         # Need at least 75% agreement to apply consistency correction
         if char_counts[best_char] >= total_games * 0.75:
             return best_char
@@ -713,7 +710,7 @@ def display_state_analysis(analysis: GameStateAnalysis) -> None:
         small_disadv = [s for s in small_segments if s.state == GameState.DISADVANTAGE]
 
         console.print("[bold dim]SMALL INTERACTIONS:[/bold dim]")
-        console.print(f"[dim]  (brief exchanges <5s)[/dim]")
+        console.print("[dim]  (brief exchanges <5s)[/dim]")
 
         if small_adv:
             adv_total = sum(s.duration for s in small_adv)
@@ -736,7 +733,7 @@ def display_state_analysis(analysis: GameStateAnalysis) -> None:
     console.print("[dim]  (timestamps when neutral was won/lost)[/dim]")
 
     # Build transition list from segments
-    transitions = []
+    transitions: list[tuple[float, str, GameState | None]] = []
     for i, seg in enumerate(all_segments):
         if seg.state == GameState.NEUTRAL:
             # Entering neutral = won neutral
@@ -769,7 +766,7 @@ def display_state_analysis(analysis: GameStateAnalysis) -> None:
 def analyze(
     url: Annotated[str, typer.Argument(help="YouTube URL of the SSBU replay")],
     player: Annotated[
-        Optional[int],
+        int | None,
         typer.Option(
             "--player",
             "-p",
@@ -779,7 +776,7 @@ def analyze(
         ),
     ] = None,
     games: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--games",
             "-g",
@@ -820,7 +817,7 @@ def analyze(
     if player is None:
         player = prompt_player_perspective()
 
-    console.print(f"\n[bold green]RunItBack[/bold green] - SSBU Replay Analyzer")
+    console.print("\n[bold green]RunItBack[/bold green] - SSBU Replay Analyzer")
     console.print(f"Analyzing as [cyan]Player {player}[/cyan]")
     console.print(f"URL: {url}\n")
 
@@ -993,10 +990,11 @@ def add_stage_reference(
     - kalos_pokemon_league
     - pokemon_stadium_2
     """
-    import cv2
     from pathlib import Path
 
-    from runitback.cv.stage_detector import Stage, STAGE_REFERENCES_DIR
+    import cv2
+
+    from runitback.cv.stage_detector import STAGE_REFERENCES_DIR, Stage
 
     # Validate stage name
     try:

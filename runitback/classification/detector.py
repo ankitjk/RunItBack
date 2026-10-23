@@ -22,9 +22,7 @@ Stock loss detection methods:
 
 import logging
 import os
-from typing import Optional
 
-import cv2
 import numpy as np
 
 from runitback.classification.states import (
@@ -35,8 +33,8 @@ from runitback.classification.states import (
     StateSegment,
     StockLoss,
 )
-from runitback.cv.ocr import read_damage_percentage, read_damage_batch_parallel
-from runitback.cv.ui_detector import get_roi, P1_DAMAGE_ROI, P2_DAMAGE_ROI, detect_stock_counts
+from runitback.cv.ocr import read_damage_batch_parallel, read_damage_percentage
+from runitback.cv.ui_detector import P1_DAMAGE_ROI, P2_DAMAGE_ROI, detect_stock_counts, get_roi
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +64,7 @@ class GameStateDetector:
         neutral_reset_time: float = 1.5,
         use_gemini_stock_detection: bool = False,
         use_smart_gemini: bool = True,
-        gemini_api_key: Optional[str] = None,
+        gemini_api_key: str | None = None,
         use_scene_classification: bool = True,
         use_parallel_ocr: bool = False,  # Disabled by default - pool creation overhead
         ocr_workers: int = 4,
@@ -138,8 +136,8 @@ class GameStateDetector:
         self,
         frames: list,
         frame_interval: float = 0.5,
-        game_end_times: Optional[list[float]] = None,
-        game_start_times: Optional[list[float]] = None,
+        game_end_times: list[float] | None = None,
+        game_start_times: list[float] | None = None,
     ) -> GameStateAnalysis:
         """Detect game states from a list of frames.
 
@@ -226,8 +224,8 @@ class GameStateDetector:
             List of FrameState with damage values, stock counts, and scene state
         """
         frame_states: list[FrameState] = []
-        prev_p1_damage: Optional[float] = None
-        prev_p2_damage: Optional[float] = None
+        prev_p1_damage: float | None = None
+        prev_p2_damage: float | None = None
 
         # Batch scene classification for efficiency
         scene_states = []
@@ -254,7 +252,7 @@ class GameStateDetector:
             logger.info(f"Skipping OCR for {frames_outside_bounds} frames outside game boundaries")
 
         # Option 5: Process OCR in parallel if enabled and we have enough frames
-        ocr_results: dict[int, tuple[Optional[float], float, Optional[float], float]] = {}
+        ocr_results: dict[int, tuple[float | None, float, float | None, float]] = {}
 
         if self.use_parallel_ocr and len(frames_to_ocr) >= 4:
             # Collect all ROIs for parallel processing
@@ -348,7 +346,7 @@ class GameStateDetector:
         return frame_states
 
     def _detect_state_transitions(
-        self, frame_states: list[FrameState], frames: Optional[list] = None
+        self, frame_states: list[FrameState], frames: list | None = None
     ) -> None:
         """Detect state transitions based on damage changes.
 
@@ -363,28 +361,24 @@ class GameStateDetector:
 
         # Start in neutral
         current_state = GameState.NEUTRAL
-        last_hit_time: Optional[float] = None
+        last_hit_time: float | None = None
 
         # Track previous damage values
-        prev_p1_damage: Optional[float] = None
-        prev_p2_damage: Optional[float] = None
+        prev_p1_damage: float | None = None
+        prev_p2_damage: float | None = None
 
-        # Track stock counts to detect changes
-        # Start at 3 stocks each (standard SSBU match)
-        prev_p1_stocks: int = 3
-        prev_p2_stocks: int = 3
 
         # Track last stock loss time to prevent duplicate detections
-        last_p1_stock_loss_time: Optional[float] = None
-        last_p2_stock_loss_time: Optional[float] = None
+        last_p1_stock_loss_time: float | None = None
+        last_p2_stock_loss_time: float | None = None
         STOCK_LOSS_COOLDOWN = 10.0  # Seconds before another stock loss can be detected for same player
 
         # Track consecutive low-damage frames to confirm stock loss
         # (helps filter OCR noise where damage briefly reads as 0)
         p1_low_damage_frames = 0
         p2_low_damage_frames = 0
-        p1_high_damage_before_low: Optional[float] = None  # Damage before low streak started
-        p2_high_damage_before_low: Optional[float] = None
+        p1_high_damage_before_low: float | None = None  # Damage before low streak started
+        p2_high_damage_before_low: float | None = None
         CONFIRM_FRAMES = 3  # Require 3 consecutive low frames (1.5 seconds at 0.5s interval)
         MIN_KILL_DAMAGE = 50  # Minimum damage before stock loss is plausible (filters OCR noise)
         LOW_PERCENT_KILL_THRESHOLD = 15  # Damage drop to 0 from this range triggers smart Gemini
@@ -394,13 +388,13 @@ class GameStateDetector:
         # even if OCR didn't catch the damage reset properly
         p1_in_respawn = False
         p2_in_respawn = False
-        p1_damage_before_respawn: Optional[float] = None
-        p2_damage_before_respawn: Optional[float] = None
-        MIN_RESPAWN_KILL_DAMAGE = 0  # No minimum - respawn detection is reliable visual signal
+        p1_damage_before_respawn: float | None = None
+        p2_damage_before_respawn: float | None = None
 
         # Track uncertain situations for smart Gemini
         # These are frame indices where we'll later check with Gemini
-        uncertain_low_percent_kills: list[int] = []  # Frame indices with possible low-percent kills
+        # (frame index, player, damage before the drop) for possible low-percent kills
+        uncertain_low_percent_kills: list[tuple[int, int, float]] = []
         uncertain_respawn_frames: list[int] = []  # Frames where respawn seen but no stock loss attributed
 
         # Track maximum damage seen to handle OCR noise
@@ -535,7 +529,10 @@ class GameStateDetector:
                 last_p1_stock_loss_time = fs.timestamp
                 # Reset recent max after stock loss (player starts fresh)
                 p1_recent_max_damage = 0.0
-                logger.debug(f"P1 stock loss detected (damage reset): {p1_high_damage_before_low:.0f}% -> low at {fs.timestamp:.1f}s")
+                logger.debug(
+                    f"P1 stock loss detected (damage reset): "
+                    f"{p1_high_damage_before_low:.0f}% -> low at {fs.timestamp:.1f}s"
+                )
             # SMART GEMINI: Check for low-percent kills (damage dropped but was below MIN_KILL_DAMAGE)
             elif (p1_low_damage_frames == CONFIRM_FRAMES and
                   p1_high_damage_before_low is not None and
@@ -543,7 +540,10 @@ class GameStateDetector:
                   cooldown_p1_ok and not both_reset):
                 # Possible low-percent kill - mark for Gemini check
                 uncertain_low_percent_kills.append((fs.frame_index, 1, p1_high_damage_before_low))
-                logger.debug(f"P1 uncertain low-percent kill: {p1_high_damage_before_low:.0f}% -> low at {fs.timestamp:.1f}s (will check with Gemini)")
+                logger.debug(
+                    f"P1 uncertain low-percent kill: {p1_high_damage_before_low:.0f}% -> low at "
+                    f"{fs.timestamp:.1f}s (will check with Gemini)"
+                )
 
             # P2 stock loss: confirm only after consecutive low damage frames
             # and only if damage was high enough before the low streak
@@ -555,7 +555,10 @@ class GameStateDetector:
                 last_p2_stock_loss_time = fs.timestamp
                 # Reset recent max after stock loss (player starts fresh)
                 p2_recent_max_damage = 0.0
-                logger.debug(f"P2 stock loss detected (damage reset): {p2_high_damage_before_low:.0f}% -> low at {fs.timestamp:.1f}s")
+                logger.debug(
+                    f"P2 stock loss detected (damage reset): "
+                    f"{p2_high_damage_before_low:.0f}% -> low at {fs.timestamp:.1f}s"
+                )
             # SMART GEMINI: Check for low-percent kills (damage dropped but was below MIN_KILL_DAMAGE)
             elif (p2_low_damage_frames == CONFIRM_FRAMES and
                   p2_high_damage_before_low is not None and
@@ -563,7 +566,10 @@ class GameStateDetector:
                   cooldown_p2_ok and not both_reset):
                 # Possible low-percent kill - mark for Gemini check
                 uncertain_low_percent_kills.append((fs.frame_index, 2, p2_high_damage_before_low))
-                logger.debug(f"P2 uncertain low-percent kill: {p2_high_damage_before_low:.0f}% -> low at {fs.timestamp:.1f}s (will check with Gemini)")
+                logger.debug(
+                    f"P2 uncertain low-percent kill: {p2_high_damage_before_low:.0f}% -> low at "
+                    f"{fs.timestamp:.1f}s (will check with Gemini)"
+                )
 
             # If both reset at same time, log it as game transition
             if both_reset and p1_low_damage_frames == CONFIRM_FRAMES:
@@ -968,12 +974,12 @@ class GameStateDetector:
 
                 # Remove unverified losses first (likely false positives)
                 for frame_idx, timestamp in unverified_losses:
-                    fs = fs_by_idx.get(frame_idx)
-                    if fs:
+                    loss_fs = fs_by_idx.get(frame_idx)
+                    if loss_fs:
                         if player_key == 'p1':
-                            fs.p1_stock_loss = False
+                            loss_fs.p1_stock_loss = False
                         else:
-                            fs.p2_stock_loss = False
+                            loss_fs.p2_stock_loss = False
                         logger.info(
                             f"Removed {player_key.upper()} stock loss at {timestamp:.1f}s "
                             f"(no respawn detected - likely false positive)"
@@ -988,12 +994,12 @@ class GameStateDetector:
                     to_keep = set(frame_idx for frame_idx, _ in verified_losses[:max_stocks])
                     for frame_idx, timestamp in verified_losses:
                         if frame_idx not in to_keep:
-                            fs = fs_by_idx.get(frame_idx)
-                            if fs:
+                            loss_fs = fs_by_idx.get(frame_idx)
+                            if loss_fs:
                                 if player_key == 'p1':
-                                    fs.p1_stock_loss = False
+                                    loss_fs.p1_stock_loss = False
                                 else:
-                                    fs.p2_stock_loss = False
+                                    loss_fs.p2_stock_loss = False
                                 logger.debug(
                                     f"Removed excess {player_key.upper()} stock loss at {timestamp:.1f}s "
                                     f"(game {game_idx + 1}, keeping first {max_stocks})"
@@ -1017,7 +1023,7 @@ class GameStateDetector:
                 f"Game {game_idx + 1} final stock losses: P1={counts['p1']}, P2={counts['p2']}"
             )
 
-    def _get_disadvantage_type(self, scene_state: Optional[str]) -> DisadvantageType:
+    def _get_disadvantage_type(self, scene_state: str | None) -> DisadvantageType:
         """Map scene state to disadvantage type.
 
         Args:
@@ -1059,7 +1065,7 @@ class GameStateDetector:
         frame_states: list[FrameState],
         frames: list,
         uncertain_low_percent_kills: list,
-        uncertain_respawn_frames: list[int] = None,
+        uncertain_respawn_frames: list[int] | None = None,
     ) -> None:
         """Post-process with Gemini for uncertain stock loss situations.
 
@@ -1343,7 +1349,10 @@ class GameStateDetector:
             if check_fs.p2_damage is not None and check_fs.p2_damage > p2_damage_before and check_fs.p2_damage < 200:
                 p2_damage_before = check_fs.p2_damage
 
-        logger.debug(f"GAME! at {fs.timestamp:.1f}s - damage before: P1={p1_damage_before:.0f}%, P2={p2_damage_before:.0f}%")
+        logger.debug(
+            f"GAME! at {fs.timestamp:.1f}s - damage before: "
+            f"P1={p1_damage_before:.0f}%, P2={p2_damage_before:.0f}%"
+        )
 
         # Player with significantly higher damage was the one who died
         # (they were in kill percent when the final hit landed)
@@ -1351,10 +1360,16 @@ class GameStateDetector:
 
         if damage_diff > 20:  # P1 had much higher damage
             fs.p1_stock_loss = True
-            logger.info(f"Smart Gemini inferred P1 lost final stock (higher damage: {p1_damage_before:.0f}%) at {fs.timestamp:.1f}s")
+            logger.info(
+                f"Smart Gemini inferred P1 lost final stock "
+                f"(higher damage: {p1_damage_before:.0f}%) at {fs.timestamp:.1f}s"
+            )
         elif damage_diff < -20:  # P2 had much higher damage
             fs.p2_stock_loss = True
-            logger.info(f"Smart Gemini inferred P2 lost final stock (higher damage: {p2_damage_before:.0f}%) at {fs.timestamp:.1f}s")
+            logger.info(
+                f"Smart Gemini inferred P2 lost final stock "
+                f"(higher damage: {p2_damage_before:.0f}%) at {fs.timestamp:.1f}s"
+            )
         else:
             # Similar damage - fall back to stock loss count within this game
             # Find the game start (last game end before this one, or start of video)
@@ -1363,7 +1378,10 @@ class GameStateDetector:
                 if check_fs.frame_index >= game_end_idx:
                     continue
                 # A new game starts after a long gap in damage or when stocks reset
-                if check_fs.p1_damage is not None and check_fs.p1_damage < 5 and check_fs.p2_damage is not None and check_fs.p2_damage < 5:
+                if (
+                    check_fs.p1_damage is not None and check_fs.p1_damage < 5
+                    and check_fs.p2_damage is not None and check_fs.p2_damage < 5
+                ):
                     # Both players at 0% suggests game just started
                     game_start_time = check_fs.timestamp
                     break
@@ -1383,10 +1401,16 @@ class GameStateDetector:
 
             if p1_losses > p2_losses:
                 fs.p1_stock_loss = True
-                logger.info(f"Smart Gemini inferred P1 lost final stock (more losses in game: {p1_losses}) at {fs.timestamp:.1f}s")
+                logger.info(
+                    f"Smart Gemini inferred P1 lost final stock "
+                    f"(more losses in game: {p1_losses}) at {fs.timestamp:.1f}s"
+                )
             elif p2_losses > p1_losses:
                 fs.p2_stock_loss = True
-                logger.info(f"Smart Gemini inferred P2 lost final stock (more losses in game: {p2_losses}) at {fs.timestamp:.1f}s")
+                logger.info(
+                    f"Smart Gemini inferred P2 lost final stock "
+                    f"(more losses in game: {p2_losses}) at {fs.timestamp:.1f}s"
+                )
             else:
                 # Still can't determine - this shouldn't happen in a normal game
                 # Default to P1 with a warning

@@ -58,7 +58,6 @@ import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -87,7 +86,6 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-
 # =============================================================================
 # YouTube Download Support
 # =============================================================================
@@ -102,7 +100,7 @@ def is_youtube_url(url: str) -> bool:
     return any(re.match(pattern, url) for pattern in youtube_patterns)
 
 
-def extract_video_id(url: str) -> Optional[str]:
+def extract_video_id(url: str) -> str | None:
     """Extract video ID from YouTube URL."""
     patterns = [
         r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([\w-]+)',
@@ -293,11 +291,11 @@ class VideoLabels:
                     "end_sec": g.end_sec,
                     "labels": [
                         {
-                            "start_sec": l.start_sec,
-                            "end_sec": l.end_sec,
-                            "class": l.scene_class,
+                            "start_sec": lbl.start_sec,
+                            "end_sec": lbl.end_sec,
+                            "class": lbl.scene_class,
                         }
-                        for l in g.labels
+                        for lbl in g.labels
                     ],
                 }
                 for g in self.games
@@ -311,11 +309,11 @@ class VideoLabels:
         for g in data.get("games", []):
             labels = [
                 SegmentLabel(
-                    start_sec=l["start_sec"],
-                    end_sec=l["end_sec"],
-                    scene_class=l["class"],
+                    start_sec=lbl["start_sec"],
+                    end_sec=lbl["end_sec"],
+                    scene_class=lbl["class"],
                 )
-                for l in g.get("labels", [])
+                for lbl in g.get("labels", [])
             ]
             games.append(
                 GameLabels(
@@ -375,13 +373,13 @@ class VideoPlayer(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.cap: Optional[cv2.VideoCapture] = None
+        self.cap: cv2.VideoCapture | None = None
         self.fps = 30.0
         self.total_frames = 0
         self.current_frame = 0
         self.playing = False
         self.playback_speed = 1.0
-        self._current_frame_data: Optional[np.ndarray] = None  # Cache for resizing
+        self._current_frame_data: np.ndarray | None = None  # Cache for resizing
 
         self._setup_ui()
         self._setup_timer()
@@ -493,7 +491,7 @@ class VideoPlayer(QWidget):
         )
         self.video_label.setPixmap(scaled)
 
-    def resizeEvent(self, event):
+    def resizeEvent(self, event):  # noqa: N802 - Qt override name
         """Handle resize events to scale video with window."""
         super().resizeEvent(event)
         # Re-render the cached frame at the new size
@@ -678,7 +676,6 @@ class LabelPanel(QWidget):
             # Find the matching SceneState for color
             for state in SceneState:
                 if state.value == label.scene_class:
-                    color = SCENE_COLORS.get(state, "#888888")
                     class_item.setForeground(Qt.GlobalColor.white)
                     break
             self.table.setItem(i, 2, class_item)
@@ -848,15 +845,15 @@ class ClassDistributionPanel(QWidget):
 class SceneLabeler(QMainWindow):
     """Main labeling application window."""
 
-    def __init__(self, video_path: str, labels_path: Optional[str] = None):
+    def __init__(self, video_path: str, labels_path: str | None = None):
         super().__init__()
         self.video_path = Path(video_path)
         self.labels_path = Path(labels_path) if labels_path else None
 
-        self.video_labels: Optional[VideoLabels] = None
+        self.video_labels: VideoLabels | None = None
         self.current_game_index = 0
-        self.segment_start: Optional[float] = None
-        self.current_class: Optional[SceneState] = None  # For continuous labeling
+        self.segment_start: float | None = None
+        self.current_class: SceneState | None = None  # For continuous labeling
         self.undo_stack: list[tuple] = []  # (game_index, label_index)
 
         self._setup_ui()
@@ -1210,7 +1207,7 @@ class SceneLabeler(QMainWindow):
             self._update_ui()
             self.statusBar().showMessage(f"Undone: {removed.scene_class}")
 
-    def closeEvent(self, event):
+    def closeEvent(self, event):  # noqa: N802 - Qt override name
         """Handle window close."""
         # Check for unsaved changes
         reply = QMessageBox.question(
