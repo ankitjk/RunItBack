@@ -50,8 +50,8 @@ Run the full RunItBack pipeline over one YouTube replay and summarize the result
 
 - **Stage is always "unknown"** - stage detection is switched off (ISSUE-009).
 - **No Gemini key is configured**, so character detection is template matching
-  only and final-stock losses at GAME! are often missed (ISSUE-005). Say so
-  when presenting results.
+  only, and low-percent kills that never show a damage reset can be missed.
+  Say so when presenting results.
 - **Template matching often names the wrong characters** (ISSUE-013). Compare
   the detected characters with the video title, which usually names them, and
   point out any mismatch rather than reporting the detection as fact.

@@ -15,7 +15,7 @@ with the `/issues` skill.
 - Planned features (edgeguard detection, Slippi, etc.) are not issues - they live
   under "Future Improvements" in `docs/DEVELOPMENT.md`.
 
-**Next ID:** ISSUE-016
+**Next ID:** ISSUE-017
 
 Severity: **High** = causes wrong results on real videos. **Medium** = blocks
 measuring or improving accuracy. **Low** = tooling, docs, or performance.
@@ -65,7 +65,7 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
   is missed. ISSUE-001's phantom 0% readings make this fire more often.
 - **Evidence:** Steve vs Palutena 102.0s - log reads "Game transition detected
   (both players reset to 0%)" mid-game.
-- **Where:** `runitback/classification/detector.py:506` (and its uses at 527, 540, 553)
+- **Where:** `runitback/classification/detector.py:519` (and its uses at 540, 553, 566, 579)
 
 ### ISSUE-004: Stale max damage is carried forward
 - **Area:** Stock-loss detection - **Found:** 2026-01-11 investigation
@@ -74,21 +74,10 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
   value, crediting the death to the wrong player.
 - **Evidence:** Steve vs Palutena - stale P2 max of 113 (from 88.5s) took credit
   for P1's death at 100.5s.
-- **Where:** `runitback/classification/detector.py:473` (refill),
-  `:596` (`p2_damage_before_respawn = p2_recent_max_damage`)
+- **Where:** `runitback/classification/detector.py:486` (refill),
+  `:609` (`p2_damage_before_respawn = p2_recent_max_damage`)
 - **Note:** ISSUE-001 to 004 together cause the "right time, wrong player"
   attribution flips (2 in the October 23 benchmark). Re-check flips after fixing them.
-
-### ISSUE-005: Final-stock losses missed without a Gemini key
-- **Area:** Stock-loss detection - **Found:** 2026-10-23 benchmark
-- **What happens:** The last stock of a game has no damage reset to detect.
-  Only the Gemini post-pass catches it, and with no key configured that pass
-  returns nothing.
-- **Evidence:** 9 of 17 misses in the October 23 benchmark (4 videos, Gemini
-  off) were final-stock GAME! losses.
-- **Where:** `runitback/classification/detector.py:1063` (`_smart_gemini_postprocess`)
-- **Suggested fix:** A non-Gemini signal - the GAME! marker is already detected
-  in `cli.py`; the player whose damage was last rising at GAME! lost the stock.
 
 ### ISSUE-013: Template-matching fallback misidentifies characters and ignores title hints
 - **Area:** Character detection - **Found:** 2026-10-23, verifying the fixed `/analyze` skill
@@ -157,7 +146,7 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 - **Area:** Performance - **Found:** 2026-01-06
 - **What happens:** `read_damage_batch_parallel` exists but is not used because
   process-pool overhead outweighed the gain. A benchmark run takes ~20 min per video.
-- **Where:** `runitback/cv/ocr.py:285`
+- **Where:** `runitback/cv/ocr.py:319`
 
 ---
 
@@ -166,5 +155,7 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 One line per fixed issue, newest first:
 `- ISSUE-NNN: <title> (fixed YYYY-MM-DD, DEVELOPMENT.md <Month D, YYYY>)`
 
+- ISSUE-016: Stock cap keeps the earliest losses, dropping a real final stock (fixed 2026-10-24, DEVELOPMENT.md October 24, 2026)
+- ISSUE-005: Final-stock losses missed without a Gemini key (fixed 2026-10-24, DEVELOPMENT.md October 24, 2026)
 - ISSUE-012: `/analyze` skill has broken commands (fixed 2026-10-23, DEVELOPMENT.md October 23, 2026)
 - ISSUE-010: `/debug-video` skill has broken commands (fixed 2026-10-23, DEVELOPMENT.md October 23, 2026)

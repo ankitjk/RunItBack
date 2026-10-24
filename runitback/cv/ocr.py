@@ -211,6 +211,40 @@ def read_damage_percentage(
         return None, 0.0
 
 
+def has_damage_digits(roi: np.ndarray) -> bool | None:
+    """Whether OCR finds any digit in a player's damage region.
+
+    At the GAME! screen the losing player's damage number disappears, leaving
+    only their name tag, while the winner's stays on screen. This checks the raw
+    OCR text rather than the parsed value, because tags themselves can parse as
+    numbers ("gleeb glob" -> 61, ISSUE-001).
+
+    Args:
+        roi: BGR image of the damage region
+
+    Returns:
+        True if the text contains a digit, False if it does not (or no text was
+        found), None if OCR itself failed.
+    """
+    if roi is None or roi.size == 0:
+        return None
+    try:
+        results = get_ocr().predict(roi)
+    except Exception as e:
+        logger.warning(f"OCR error: {e}")
+        return None
+    if not results:
+        return False
+    result = results[0]
+    if hasattr(result, "rec_texts"):
+        texts = result.rec_texts
+    elif hasattr(result, "keys"):
+        texts = result.get("rec_texts", [])
+    else:
+        return None
+    return any(ch.isdigit() for text in texts for ch in text)
+
+
 def _read_damage_old_format(results, confidence_threshold: float) -> tuple[float | None, float]:
     """Handle old PaddleOCR result format for backward compatibility."""
     if not results or not results[0]:

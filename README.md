@@ -23,36 +23,42 @@ YouTube URL
           └─ scene             ConvNeXt-Tiny classifier (ONNX): grounded, airborne,
                                offstage, on ledge, respawning, ...
               └─ game state    who took damage -> advantage / disadvantage;
-                               damage reset + respawn -> stock lost
+                               damage reset + respawn -> stock lost;
+                               GAME! + loser's blank damage display -> final stock
 ```
 
 Each signal is noisy on its own - OCR misreads under particle effects, the
 classifier was trained on limited data - so the stock-loss logic combines them:
 a loss needs high damage first, then several consecutive low readings or a
-respawn, with per-player cooldowns to suppress duplicates.
+respawn, with per-player cooldowns to suppress duplicates. A game's last stock
+has neither, so it is read from the GAME! screen instead: at that moment the
+loser's damage number disappears while the winner's stays on screen.
 
 ## Results
 
-Stock-loss recall against hand-labeled timestamps (a detection must be within
-5s **and** credit the right player). Measured October 23, 2026, **without** a
-Gemini key:
+Stock-loss detection against hand-labeled timestamps for 6 full tournament
+sets (a detection must be within 5s **and** credit the right player). Measured
+October 24, 2026, **without** a Gemini key:
 
 | Set | Recall | False positives |
 |-----|--------|-----------------|
 | Ken vs King Dedede | 100% (8/8) | 0 |
-| Dark Pit vs Ken | 83% (15/18) | 4 |
-| Ken vs Sonic | 77% (10/13) | 4 |
-| Steve vs Palutena | 52% (12/23) | 15 |
-| **Total** | **72.6% (45/62)** | **23** |
+| Cloud vs Pit | 100% (14/14) | 0 |
+| Ken vs Sonic | 92% (12/13) | 4 |
+| Dark Pit vs Ken | 89% (16/18) | 3 |
+| Mario vs Ness | 69% (9/13) | 8 |
+| Steve vs Palutena | 65% (15/23) | 12 |
+| **Total** | **83.1% (74/89)** | **27** (precision 73.3%) |
 
-Two further benchmark sets could not be downloaded on that run (YouTube's bot
-check), so this covers 4 of 6. The weakest set, Steve vs Palutena, is dense
-with block and particle effects over the damage display; its failures are
-diagnosed in [docs/ISSUES.md](docs/ISSUES.md).
+On the four sets measured the day before, recall rose from 72.6% to 82.3% after
+final-stock detection stopped depending on Gemini: missed final stocks went from
+9 to 1. The weakest set, Steve vs Palutena, is dense with block and particle
+effects over the damage display; its remaining failures are diagnosed in
+[docs/ISSUES.md](docs/ISSUES.md).
 
 **Gemini** is strongly recommended for character identification - without it,
 template matching named Steve vs Palutena as Little Mac vs Zero Suit Samus.
-Stock-loss accuracy is similar with or without it on this benchmark set.
+Stock-loss detection no longer needs it.
 
 ## Getting started
 
@@ -211,9 +217,7 @@ python tools/extract_labeled_frames.py                        # labels -> frames
 python tools/train_scene_classifier.py                        # fine-tune ConvNeXt-Tiny, export ONNX
 ```
 
-The model is fine-tuned from ImageNet weights. The current one was trained on
-a single labeled set, so it has no meaningful held-out accuracy figure yet -
-see the October 23 correction in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+The model is fine-tuned from ImageNet weights.
 
 ### Project layout
 
@@ -249,7 +253,10 @@ runitback/
   never sent twice.
 - **Measured, not assumed.** A benchmark against hand-labeled ground truth
   backs every accuracy claim, and runs are reported as not comparable when the
-  configuration differs.
+  configuration differs. Ideas are measured before they are adopted: counting
+  HUD stock icons scored 1 of 14 correct and was dropped; reading the loser's
+  blank damage display at GAME! scored 11 right, 0 wrong, 3 undecided on the
+  benchmark's game endings and became the final-stock signal.
 - **The development record is kept.** [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
   chronicles what was tried, what failed, and why - including a correction of
   earlier overstated training results.
@@ -269,8 +276,9 @@ Open bugs are tracked in [docs/ISSUES.md](docs/ISSUES.md). The main ones:
   `unknown`.
 - **OCR misreads** - player tags under the damage number can be read as damage,
   and a leading digit can be clipped, causing missed or misattributed stock losses.
-- **Final stocks** are often missed without Gemini: the last death of a game has
-  no respawn or damage reset to detect.
+- **False positives** - OCR misreads can register a death that did not happen
+  (27 across the benchmark), and a 3-stock cap then has to choose which
+  detections to keep.
 - **Characters** are unreliable without Gemini (see Results).
 - **Scene classifier training data** comes from a single labeled set; more
   labeled sets are the main path to better respawn detection.

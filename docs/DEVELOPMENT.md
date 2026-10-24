@@ -2,11 +2,64 @@
 
 This document chronicles the development process for RunItBack, including methods tried, what worked, what didn't, and the current state of the codebase.
 
-**Last Updated:** October 23, 2026
+**Last Updated:** October 24, 2026
 
 ---
 
 ## Changelog
+
+### October 24, 2026 - Final Stocks Without Gemini (ISSUE-005, ISSUE-016)
+
+**Session Goal:** Raise stock-loss recall with a measured fix to the largest failure class: final stocks missed when no Gemini key is set.
+
+**Problem:**
+- On October 23 (Gemini off, 4 sets), 9 of 17 misses were final stocks. A game's last death has no respawn or damage reset after it. Only the Gemini post-pass could find it: it asked Gemini to spot the GAME! screen, and with no key every call returned nothing.
+- Gemini was only needed to *find* GAME!. The CLI already finds it locally, and `_infer_game_end_loser` already decided the loser without Gemini.
+
+**Ideas measured before adopting:**
+- **HUD stock-icon counting** (`detect_stock_counts`, brightness-based) against known counts across Steve vs Palutena game 1: **1 of 14 correct**. Right before GAME! it said P1 had no stocks when P2 was losing. Not used.
+- **Gameplay -> non-gameplay transition from the scene classifier.** Rejected as the primary signal: it tells when a game ends, not who lost, and GAME! detection was already reliable.
+- **Blank damage display at GAME!** (proposed by Ankit): the loser's damage number disappears while the winner's stays. Read with OCR on the frame after GAME! at all 14 game endings of the 4 cached sets, judging "blank" by whether the **raw** text has a digit (tags parse as numbers, ISSUE-001): **11 right, 0 wrong, 3 undecided**. Adopted.
+
+**Changes:**
+- `runitback/classification/detector.py` - `_detect_final_stocks_locally()` runs when there is no key. Fixes ISSUE-005.
+  - It searches back up to 40s from each game's end for the GAME! screen with `detect_game_screen`, then steps to its first frame.
+  - It skips the game if a loss within 8s before GAME! was already detected, so nothing is double counted.
+  - `_loser_from_blank_damage()` decides the loser by majority over 4 frames (2s) after GAME!. If that's undecided, it uses `_infer_game_end_loser` (damage difference > 20%, then losses so far). If still undecided, it records nothing; the Gemini path would default to P1.
+- `runitback/cv/ocr.py` - `has_damage_digits()`: whether the raw OCR text of a damage region contains a digit.
+- `runitback/classification/detector.py` - stock cap. Fixes ISSUE-016.
+  - With more than 3 verified losses for a player in a game, the cap kept the *first* three chronologically, so a game's final stock - always the latest - was always the one dropped. In the first benchmark of the ISSUE-005 fix, the cap removed most of the recovered finals (logs: "still have 4-7 verified stock losses ... Keeping first 3", 12 times).
+  - It now protects one loss per game: the **earliest** loss by either player within `FINAL_STOCK_WINDOW_SECS` (6s) of the game's end, then keeps the earliest others.
+  - A first version protected the *latest* near-end loss *per player*. Benchmarked, that let post-GAME! screen noise win: Mario vs Ness kept "P1 at 3:51" and "P2 at 7:23" over the real final at 7:17, and fell from 9/13 to 7/13. Corrected and re-measured.
+- `tests/test_stock_loss_logic.py` - 13 new tests:
+  - final stock credited correctly to either player, never double counted, skipped rather than guessed, absent without a GAME! screen;
+  - the blank display deciding, overriding a damage guess, and falling back;
+  - the cap keeping the final stock, protecting only the earliest near-end loss, and ignoring the winner's late "loss".
+  - The key cap test fails without the fix.
+
+**Results** (benchmark, Gemini off; 6 sets, 20 games, 89 hand-labeled losses):
+
+| Set | Oct 23 | ISSUE-005 fix | + ISSUE-016 v1 | + ISSUE-016 corrected |
+|-----|--------|---------------|----------------|-----------------------|
+| Ken vs King Dedede | 8/8 | 8/8 | 8/8 | 8/8 |
+| Ken vs Sonic | 10/13 | 12/13 | 12/13 | 12/13 |
+| Dark Pit vs Ken | 15/18 | 15/18 | 16/18 | 16/18 |
+| Steve vs Palutena | 12/23 | 12/23 | 15/23 | 15/23 |
+| Cloud vs Pit | (not downloaded) | 14/14 | 14/14 | 14/14 |
+| Mario vs Ness | (not downloaded) | 9/13 | 7/13 | 9/13 |
+| **Original 4 sets** | **72.6%** (45/62) | 75.8% | 82.3% | **82.3%** (51/62) |
+| **All 6 sets** | - | 78.7% | 80.9% | **83.1%** (74/89) |
+| False positives (6 sets) | - | 31 | 29 | **27** (precision 73.3%) |
+
+- Missed final stocks: **9 -> 1** (19 of 20 game endings caught). The remaining one is Steve vs Palutena game 5 at 22:25.
+- The gain on the original 4 sets (+6) is below the 8 finals recovered. Keeping a final stock under the cap can displace an earlier real loss when OCR false positives (ISSUE-001) have filled a player's three slots.
+- The final run used three parallel benchmark processes (2 sets each). Scratch runner only - not committed.
+
+**Left Open:**
+- ISSUE-001 false positives remain the main limit on both recall and precision. They are also why the cap must choose at all.
+- The Jan 11 with-Gemini baseline (75.3%, 67/89) is not a like-for-like comparison - the code has changed since. `benchmark-runner` now carries this run as the no-Gemini baseline.
+
+---
 
 ### October 23, 2026 - Agent Test Run, Prompt Fixes, Change Log & Issue Tracking
 
@@ -650,6 +703,12 @@ File: `runitback/classification/detector.py`
 - After 3 consecutive low frames (CONFIRM_FRAMES), check if previous damage was ≥50%
 - If so, confirm stock loss
 - Apply 10-second cooldown per player to prevent duplicates
+
+**Final stock (no Gemini needed, since October 24, 2026):**
+- The last stock of a game has no respawn or damage reset after it, so the rules above cannot see it
+- Find the GAME! screen with the local colour detector (`detect_game_screen`), searching back from the game's end
+- The loser is the player whose damage display is blank just after GAME! (the loser's number disappears; the winner's stays). Fallback: clearly higher damage before GAME!. Otherwise nothing is recorded
+- The 3-stock cap always keeps a game's final stock (the earliest loss within 6s of its end)
 
 **Optional - Gemini Stock Counter Detection (more accurate):**
 - Enable with `use_gemini_stock_detection=True` on `GameStateDetector`

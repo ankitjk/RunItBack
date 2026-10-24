@@ -22,6 +22,7 @@ Stock loss detection methods:
 
 import logging
 import os
+from typing import Any
 
 import numpy as np
 
@@ -33,10 +34,22 @@ from runitback.classification.states import (
     StateSegment,
     StockLoss,
 )
-from runitback.cv.ocr import read_damage_batch_parallel, read_damage_percentage
-from runitback.cv.ui_detector import P1_DAMAGE_ROI, P2_DAMAGE_ROI, detect_stock_counts, get_roi
+from runitback.cv.ocr import has_damage_digits, read_damage_batch_parallel, read_damage_percentage
+from runitback.cv.ui_detector import (
+    P1_DAMAGE_ROI,
+    P2_DAMAGE_ROI,
+    detect_game_screen,
+    detect_stock_counts,
+    get_roi,
+)
 
 logger = logging.getLogger(__name__)
+
+# Final-stock detection without Gemini (ISSUE-005)
+FINAL_STOCK_SEARCH_FRAMES = 80  # search 40s back from a game's end for GAME! (0.5s frames)
+FINAL_STOCK_ALREADY_FOUND_SECS = 8.0  # a loss this close before GAME! is the final stock
+FINAL_STOCK_BLANK_CHECK_FRAMES = 4  # frames after GAME! checked for a blank damage display (2s)
+FINAL_STOCK_WINDOW_SECS = 6.0  # a loss this close to a game's end is its final stock (no respawn follows)
 
 
 class GameStateDetector:
@@ -814,6 +827,13 @@ class GameStateDetector:
                 frame_states, frames, uncertain_low_percent_kills, uncertain_respawn_frames
             )
 
+        # FINAL STOCKS WITHOUT GEMINI (ISSUE-005)
+        # A game's last stock has no respawn or damage reset after it, so the passes
+        # above cannot see it. With a key, the Gemini post-pass finds the GAME! screen;
+        # without one, find it with the local detector instead.
+        if not self.gemini_api_key and frames:
+            self._detect_final_stocks_locally(frame_states, frames)
+
         # FINAL VALIDATION: Enforce max 3 stock losses per player per game
         # This catches any excess stock losses added by Smart Gemini postprocessing
         self._enforce_stock_loss_limit(frame_states, MAX_STOCKS_PER_PLAYER)
@@ -882,7 +902,7 @@ class GameStateDetector:
         # If this is near the end of the game (within 6s), it's likely the game-ending stock
         # Don't require respawn verification for game-ending kills
         # Using 6s to account for timing variations and edge cases (5s was too tight)
-        if game_end_time - loss_timestamp <= 6.0:
+        if game_end_time - loss_timestamp <= FINAL_STOCK_WINDOW_SECS:
             logger.debug(f"Stock loss at {loss_timestamp:.1f}s is near game end - skipping respawn check")
             return True
 
@@ -949,6 +969,17 @@ class GameStateDetector:
             if self._game_end_times and game_idx < len(self._game_end_times):
                 game_end_time = self._game_end_times[game_idx]
 
+            # A game has one final stock: the earliest loss, by either player, in the
+            # window before its end. Later ones there are screen changes after GAME!
+            # (seen as damage resets), not deaths - so only this one is protected.
+            near_end = [
+                (timestamp, key, frame_idx)
+                for key in ('p1', 'p2')
+                for frame_idx, timestamp in player_losses[key]
+                if game_end_time - timestamp <= FINAL_STOCK_WINDOW_SECS
+            ]
+            game_final = min(near_end) if near_end else None
+
             for player_key in ['p1', 'p2']:
                 losses = player_losses[player_key]
                 if len(losses) <= max_stocks:
@@ -985,13 +1016,24 @@ class GameStateDetector:
                             f"(no respawn detected - likely false positive)"
                         )
 
-                # If still over limit after removing unverified, keep first max_stocks of verified
+                # If still over limit after removing unverified, keep the game's final stock
+                # plus the earliest others. The final stock (at the game's end, with no
+                # respawn after it) is the most certain loss; keeping only the earliest
+                # max_stocks always discarded it whenever earlier false positives filled
+                # the cap (ISSUE-016).
                 if len(verified_losses) > max_stocks:
+                    final_stock = [
+                        loss for loss in verified_losses
+                        if game_final is not None and game_final[1] == player_key and loss[0] == game_final[2]
+                    ]
+                    others = [loss for loss in verified_losses if loss not in final_stock]
+                    kept = final_stock + others[: max_stocks - len(final_stock)]
                     logger.warning(
                         f"Game {game_idx + 1} {player_key.upper()}: still have {len(verified_losses)} "
-                        f"verified stock losses (max is {max_stocks}). Keeping first {max_stocks}."
+                        f"verified stock losses (max is {max_stocks}). Keeping "
+                        f"{'the final stock and ' if final_stock else ''}the earliest others."
                     )
-                    to_keep = set(frame_idx for frame_idx, _ in verified_losses[:max_stocks])
+                    to_keep = {frame_idx for frame_idx, _ in kept}
                     for frame_idx, timestamp in verified_losses:
                         if frame_idx not in to_keep:
                             loss_fs = fs_by_idx.get(frame_idx)
@@ -1002,7 +1044,7 @@ class GameStateDetector:
                                     loss_fs.p2_stock_loss = False
                                 logger.debug(
                                     f"Removed excess {player_key.upper()} stock loss at {timestamp:.1f}s "
-                                    f"(game {game_idx + 1}, keeping first {max_stocks})"
+                                    f"(game {game_idx + 1}, over the {max_stocks}-stock cap)"
                                 )
 
         # Log final stock loss counts
@@ -1316,7 +1358,94 @@ class GameStateDetector:
 
         return candidates
 
-    def _infer_game_end_loser(self, frame_states: list[FrameState], game_end_idx: int) -> None:
+    def _detect_final_stocks_locally(self, frame_states: list[FrameState], frames: list) -> None:
+        """Detect each game's final stock loss from the GAME! screen, without Gemini.
+
+        For each known game end, searches backwards for the GAME! screen with the
+        local colour detector, then infers who lost from the damage and stock losses
+        before it. Skips a game if its final stock was already detected, or if the
+        loser cannot be determined (rather than guessing).
+
+        Args:
+            frame_states: All frame states (stock losses are set in place)
+            frames: Frame objects with images, in the same order as frame_states
+        """
+        frame_by_index = dict(enumerate(frames))
+        fs_by_index = {fs.frame_index: fs for fs in frame_states}
+
+        for end_idx in self._find_game_end_candidates(frame_states):
+            # The CLI's game end is ~5s after GAME!; search back up to 40s, nearest first.
+            game_idx = None
+            for check_idx in range(end_idx, end_idx - FINAL_STOCK_SEARCH_FRAMES, -1):
+                check_fs = fs_by_index.get(check_idx)
+                frame = frame_by_index.get(check_idx)
+                if check_fs is None or frame is None or self._is_near_game_start(check_fs.timestamp):
+                    continue
+                if detect_game_screen(frame.image):
+                    game_idx = check_idx
+                    break
+            if game_idx is None:
+                logger.debug(f"No GAME! screen found before frame {end_idx}; final stock not inferred")
+                continue
+
+            # GAME! spans several frames; step back to its first one.
+            while game_idx - 1 in frame_by_index and detect_game_screen(frame_by_index[game_idx - 1].image):
+                game_idx -= 1
+
+            # Already caught by the damage-reset or respawn logic - don't double count.
+            game_time = fs_by_index[game_idx].timestamp
+            if any(
+                (fs.p1_stock_loss or fs.p2_stock_loss)
+                and game_time - FINAL_STOCK_ALREADY_FOUND_SECS <= fs.timestamp <= game_time + 1.0
+                for fs in frame_states
+            ):
+                logger.debug(f"Final stock before GAME! at {game_time:.1f}s already detected")
+                continue
+
+            loser = self._loser_from_blank_damage(frame_by_index, game_idx)
+            if loser is not None:
+                fs = fs_by_index[game_idx]
+                if loser == 1:
+                    fs.p1_stock_loss = True
+                else:
+                    fs.p2_stock_loss = True
+                logger.info(f"P{loser} lost final stock at {fs.timestamp:.1f}s (damage display blank at GAME!)")
+            else:
+                self._infer_game_end_loser(frame_states, game_idx, default_to_p1=False)
+
+    def _loser_from_blank_damage(self, frame_by_index: dict[int, Any], game_idx: int) -> int | None:
+        """Identify the final-stock loser from whose damage display is blank at GAME!.
+
+        When a game ends, the loser's damage number disappears (only their name tag
+        remains) while the winner's stays on screen. Checks several frames just
+        after GAME! and returns the player whose display is blank in more of them.
+        Measured 11 right, 0 wrong, 3 undecided on the 14 game endings in the
+        benchmark sets (October 23, 2026).
+
+        Returns:
+            1 or 2, or None if no frame gives a clear answer.
+        """
+        p1_lost = p2_lost = 0
+        for offset in range(1, FINAL_STOCK_BLANK_CHECK_FRAMES + 1):
+            frame = frame_by_index.get(game_idx + offset)
+            if frame is None:
+                continue
+            p1_digits = has_damage_digits(get_roi(frame.image, P1_DAMAGE_ROI))
+            p2_digits = has_damage_digits(get_roi(frame.image, P2_DAMAGE_ROI))
+            if p1_digits is False and p2_digits is True:
+                p1_lost += 1
+            elif p2_digits is False and p1_digits is True:
+                p2_lost += 1
+
+        if p1_lost > p2_lost:
+            return 1
+        if p2_lost > p1_lost:
+            return 2
+        return None
+
+    def _infer_game_end_loser(
+        self, frame_states: list[FrameState], game_end_idx: int, default_to_p1: bool = True
+    ) -> None:
         """Infer who lost the game when GAME! is detected but stocks are unclear.
 
         Uses multiple signals to determine the loser:
@@ -1326,6 +1455,8 @@ class GameStateDetector:
         Args:
             frame_states: All frame states
             game_end_idx: Frame index where GAME! was detected
+            default_to_p1: When neither signal decides, mark P1 (the Gemini path's
+                historical behaviour). The local path passes False and skips instead.
         """
         # Find the frame state at the game end
         fs = next((f for f in frame_states if f.frame_index == game_end_idx), None)
@@ -1361,13 +1492,13 @@ class GameStateDetector:
         if damage_diff > 20:  # P1 had much higher damage
             fs.p1_stock_loss = True
             logger.info(
-                f"Smart Gemini inferred P1 lost final stock "
+                f"Inferred P1 lost final stock "
                 f"(higher damage: {p1_damage_before:.0f}%) at {fs.timestamp:.1f}s"
             )
         elif damage_diff < -20:  # P2 had much higher damage
             fs.p2_stock_loss = True
             logger.info(
-                f"Smart Gemini inferred P2 lost final stock "
+                f"Inferred P2 lost final stock "
                 f"(higher damage: {p2_damage_before:.0f}%) at {fs.timestamp:.1f}s"
             )
         else:
@@ -1402,20 +1533,22 @@ class GameStateDetector:
             if p1_losses > p2_losses:
                 fs.p1_stock_loss = True
                 logger.info(
-                    f"Smart Gemini inferred P1 lost final stock "
+                    f"Inferred P1 lost final stock "
                     f"(more losses in game: {p1_losses}) at {fs.timestamp:.1f}s"
                 )
             elif p2_losses > p1_losses:
                 fs.p2_stock_loss = True
                 logger.info(
-                    f"Smart Gemini inferred P2 lost final stock "
+                    f"Inferred P2 lost final stock "
                     f"(more losses in game: {p2_losses}) at {fs.timestamp:.1f}s"
                 )
-            else:
+            elif default_to_p1:
                 # Still can't determine - this shouldn't happen in a normal game
                 # Default to P1 with a warning
                 fs.p1_stock_loss = True
-                logger.warning(f"Smart Gemini couldn't determine GAME! loser at {fs.timestamp:.1f}s, defaulting to P1")
+                logger.warning(f"Couldn't determine GAME! loser at {fs.timestamp:.1f}s, defaulting to P1")
+            else:
+                logger.info(f"Couldn't determine GAME! loser at {fs.timestamp:.1f}s; final stock not recorded")
 
     def _get_dominant_disadvantage_type(
         self, frame_states: list[FrameState]

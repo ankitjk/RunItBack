@@ -22,8 +22,8 @@ RunItBack is a Python CLI tool that analyzes Super Smash Bros. Ultimate (SSBU) r
 ### Known Issues
 Tracked in **[docs/ISSUES.md](docs/ISSUES.md)** - the single list of open bugs,
 by severity. Manage it with `/issues`; don't keep a second list here.
-Headline: stock-loss recall is 52-100% per video (72.6% over 4 videos, Gemini
-off, October 23), and stage detection is switched off (always `unknown`).
+Headline: stock-loss recall is 83.1% over the 6 benchmark videos (65-100% per
+video, Gemini off, October 24), and stage detection is switched off (always `unknown`).
 
 ### Improvement Path
 The main bottleneck for stock loss accuracy is the scene classifier's respawn detection. More labeled training data will improve:
@@ -134,8 +134,9 @@ Character detection uses Google's Gemini Vision API (gemini-2.5-flash) for accur
   stock-loss or stage Gemini calls.
 - **Current state**: No key is configured. Gemini-dependent paths are inactive,
   so character detection runs on template matching only, and the stock-loss
-  Gemini post-pass (final-stock GAME! losses, low-percent kills) is off -
-  expect GAME! losses to make up most stock-loss misses.
+  Gemini post-pass (low-percent kills, unattributed respawns) is off. Final
+  stocks no longer need Gemini - they come from the GAME! screen and the
+  loser's blank damage display.
 - **Cache Location**: `.cache/` directory (relative to project root)
   - `llm_results/` - Character detection cache
   - `stage_results/` - Stage detection cache

@@ -40,9 +40,9 @@ The benchmark's behaviour depends on whether `GEMINI_API_KEY` is set. It is
 currently unset by deliberate choice. Without it, two things change:
 character detection falls back to template matching, and the stock-loss
 detector's Gemini post-pass (`_smart_gemini_postprocess` in `detector.py`)
-returns nothing. That pass is what catches final-stock losses at GAME!,
-low-percent kills, and unattributed respawns - so expect GAME! losses to
-dominate the misses when the key is unset. Check and state which path you
+returns nothing. That pass catches low-percent kills and unattributed
+respawns. Final stocks do not need it: without a key they come from the GAME!
+screen and the loser's blank damage display (`_detect_final_stocks_locally`). Check and state which path you
 measured. A populated `.cache/stock_counter_results/` can supply Gemini
 answers even with no key; say whether it exists.
 
@@ -73,6 +73,20 @@ comparable to it. Say so explicitly rather than presenting a misleading delta.
 
 Steve vs Palutena is the worst case and the most informative - it is dense
 with the OCR failures described in the January 11 entry.
+
+## Baseline for reference (measured WITHOUT Gemini, October 24)
+
+The current configuration. Compare against this one when the key is unset.
+
+| Video | Recall | False positives |
+|-------|--------|-----------------|
+| Ken vs King Dedede | 100% (8/8) | 0 |
+| Cloud vs Pit | 100% (14/14) | 0 |
+| Ken vs Sonic | 92% (12/13) | 4 |
+| Dark Pit vs Ken | 89% (16/18) | 3 |
+| Mario vs Ness | 69% (9/13) | 8 |
+| Steve vs Palutena | 65% (15/23) | 12 |
+| **Total** | **83.1% (74/89)** | **27** (precision 73.3%) |
 
 ## Do not
 
