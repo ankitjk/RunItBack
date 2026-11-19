@@ -17,6 +17,14 @@ Examples:
 
     # Custom directories
     python tools/extract_labeled_frames.py --labels-dir my_labels/ --output-dir my_frames/
+
+    # Re-split already-extracted frames, holding out game 2 as the test set
+    python tools/extract_labeled_frames.py --splits-only --test-game 2
+
+Splits are made by game (default): one whole game is the test set, and the end
+of each other game is the validation set. Frames 0.5s apart are near-duplicates,
+so a random frame split (--split-by frame, kept for comparison) leaks and
+overstates accuracy.
 """
 
 import argparse
@@ -206,72 +214,221 @@ def extract_frames_from_video(
     print(f"  Extracted {frames_extracted} frames")
 
 
-def create_train_val_test_splits(
-    frames_dir: Path,
-    splits_dir: Path,
+SPLITS = ("train", "val", "test")
+
+# Seconds of training frames dropped just before each validation block, so no
+# training frame is a near-duplicate of a validation frame (game split only).
+DEFAULT_VAL_GAP_SECS = 5.0
+
+
+@dataclass(frozen=True)
+class FrameInfo:
+    """An extracted frame, parsed from its {video_id}_g{game}_{time_ms}_{class}.jpg name."""
+
+    path: Path
+    video_id: str
+    game: int
+    time_sec: float
+    scene_class: str
+
+    @property
+    def group(self) -> str:
+        """The game this frame came from - the unit a game split keeps together."""
+        return f"{self.video_id}:{self.game}"
+
+
+def parse_frame_name(path: Path, scene_class: str) -> FrameInfo:
+    """Parse a frame file name written by extract_frames_from_video.
+
+    Splits from the right, because YouTube IDs can themselves contain "_".
+    """
+    suffix = f"_{scene_class}.jpg"
+    if not path.name.endswith(suffix):
+        raise ValueError(f"{path.name}: expected to end with {suffix}")
+    stem = path.name[: -len(suffix)]
+    video_and_game, time_ms = stem.rsplit("_", 1)
+    video_id, game = video_and_game.rsplit("_g", 1)
+    return FrameInfo(path, video_id, int(game), int(time_ms) / 1000, scene_class)
+
+
+def collect_frames(frames_dir: Path) -> list[FrameInfo]:
+    """Every extracted frame under frames_dir/<class>/, parsed."""
+    frames = []
+    for class_name in SCENE_CLASSES:
+        class_dir = frames_dir / class_name
+        if class_dir.exists():
+            frames.extend(parse_frame_name(p, class_name) for p in sorted(class_dir.glob("*.jpg")))
+    return frames
+
+
+def resolve_test_game(groups: list[str], test_game: str | None) -> str:
+    """Turn a --test-game value ("3" or "VIDEO_ID:3") into a group key.
+
+    A bare game number is allowed only when one video is labeled. With no value,
+    the last game of the last video is held out.
+    """
+    if test_game is None:
+        return groups[-1]
+    if ":" in test_game:
+        key = test_game
+    else:
+        videos = sorted({g.rsplit(":", 1)[0] for g in groups})
+        if len(videos) != 1:
+            raise ValueError(
+                f"{len(videos)} videos are labeled; give --test-game as VIDEO_ID:GAME. Games: {', '.join(groups)}"
+            )
+        key = f"{videos[0]}:{int(test_game)}"
+    if key not in groups:
+        raise ValueError(f"No frames for game {key}. Games: {', '.join(groups)}")
+    return key
+
+
+def assign_game_splits(
+    frames: list[FrameInfo],
+    test_game: str | None = None,
+    val_ratio: float = 0.15,
+    val_gap_secs: float = DEFAULT_VAL_GAP_SECS,
+) -> tuple[dict[str, list[FrameInfo]], dict]:
+    """Split frames by game, so near-duplicate neighbouring frames never cross splits.
+
+    - test: every frame of one held-out game. Evaluated once, after training.
+    - val: the last `val_ratio` of each remaining game's labeled time span. Used
+      to choose the checkpoint, so it must not be the test game.
+    - train: the rest, minus frames within `val_gap_secs` before a val block.
+
+    Returns:
+        (frames by split, a manifest describing the split for split_manifest.json)
+    """
+    groups = sorted({f.group for f in frames}, key=lambda g: (g.rsplit(":", 1)[0], int(g.rsplit(":", 1)[1])))
+    if len(groups) < 2:
+        raise ValueError(f"A game split needs at least 2 labeled games; found {len(groups)}.")
+    test_key = resolve_test_game(groups, test_game)
+
+    splits: dict[str, list[FrameInfo]] = {s: [] for s in SPLITS}
+    dropped = 0
+    val_blocks = {}
+    for group in groups:
+        group_frames = [f for f in frames if f.group == group]
+        if group == test_key:
+            splits["test"].extend(group_frames)
+            continue
+        start = min(f.time_sec for f in group_frames)
+        end = max(f.time_sec for f in group_frames)
+        val_start = end - (end - start) * val_ratio
+        val_blocks[group] = [round(val_start, 2), round(end, 2)]
+        for f in group_frames:
+            if f.time_sec >= val_start:
+                splits["val"].append(f)
+            elif f.time_sec >= val_start - val_gap_secs:
+                dropped += 1
+            else:
+                splits["train"].append(f)
+
+    manifest = {
+        "split_by": "game",
+        "test_game": test_key,
+        "train_games": [g for g in groups if g != test_key],
+        "val_blocks_sec": val_blocks,
+        "val_ratio": val_ratio,
+        "val_gap_secs": val_gap_secs,
+        "dropped_gap_frames": dropped,
+    }
+    return splits, manifest
+
+
+def assign_frame_splits(
+    frames: list[FrameInfo],
     train_ratio: float = 0.7,
     val_ratio: float = 0.15,
     seed: int = 42,
+) -> tuple[dict[str, list[FrameInfo]], dict]:
+    """The original per-class random frame split.
+
+    Leaks: frames 0.5s apart are near-duplicates and land in different splits,
+    so its scores measure memorization. Kept only to compare against.
+    """
+    rng = random.Random(seed)
+    splits: dict[str, list[FrameInfo]] = {s: [] for s in SPLITS}
+    for class_name in SCENE_CLASSES:
+        class_frames = [f for f in frames if f.scene_class == class_name]
+        rng.shuffle(class_frames)
+        n = len(class_frames)
+        train_end = int(n * train_ratio)
+        val_end = train_end + int(n * val_ratio)
+        splits["train"].extend(class_frames[:train_end])
+        splits["val"].extend(class_frames[train_end:val_end])
+        splits["test"].extend(class_frames[val_end:])
+    manifest = {"split_by": "frame", "train_ratio": train_ratio, "val_ratio": val_ratio, "seed": seed}
+    return splits, manifest
+
+
+def create_train_val_test_splits(
+    frames_dir: Path,
+    splits_dir: Path,
+    split_by: str = "game",
+    test_game: str | None = None,
+    train_ratio: float = 0.7,
+    val_ratio: float = 0.15,
+    val_gap_secs: float = DEFAULT_VAL_GAP_SECS,
+    seed: int = 42,
 ) -> dict:
-    """Create train/val/test splits from extracted frames.
+    """Copy extracted frames into splits_dir/{train,val,test}/<class>/.
+
+    Also writes splits_dir/split_manifest.json, recording how the split was made.
 
     Returns:
-        Dictionary with split statistics
+        Dictionary with split statistics: {split: {class: frame count}}
     """
-    random.seed(seed)
+    frames = collect_frames(frames_dir)
+    if split_by == "game":
+        splits, manifest = assign_game_splits(frames, test_game, val_ratio, val_gap_secs)
+    elif split_by == "frame":
+        splits, manifest = assign_frame_splits(frames, train_ratio, val_ratio, seed)
+    else:
+        raise ValueError(f"split_by must be 'game' or 'frame', not {split_by!r}")
 
-    split_stats = {
-        "train": defaultdict(int),
-        "val": defaultdict(int),
-        "test": defaultdict(int),
-    }
-
-    # Clear existing splits
     if splits_dir.exists():
         shutil.rmtree(splits_dir)
 
-    for split in ["train", "val", "test"]:
+    split_stats: dict[str, defaultdict[str, int]] = {s: defaultdict(int) for s in SPLITS}
+    for split, split_frames in splits.items():
         (splits_dir / split).mkdir(parents=True, exist_ok=True)
+        for f in split_frames:
+            class_dir = splits_dir / split / f.scene_class
+            class_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f.path, class_dir / f.path.name)
+            split_stats[split][f.scene_class] += 1
 
-    # Process each class
-    for class_name in SCENE_CLASSES:
-        class_dir = frames_dir / class_name
-        if not class_dir.exists():
-            continue
-
-        # Get all frames for this class
-        frames = list(class_dir.glob("*.jpg"))
-        random.shuffle(frames)
-
-        # Calculate split indices
-        n = len(frames)
-        train_end = int(n * train_ratio)
-        val_end = train_end + int(n * val_ratio)
-
-        # Split frames
-        train_frames = frames[:train_end]
-        val_frames = frames[train_end:val_end]
-        test_frames = frames[val_end:]
-
-        # Create class directories in each split
-        for split, split_frames in [
-            ("train", train_frames),
-            ("val", val_frames),
-            ("test", test_frames),
-        ]:
-            split_class_dir = splits_dir / split / class_name
-            split_class_dir.mkdir(parents=True, exist_ok=True)
-
-            for frame_path in split_frames:
-                # Copy (or symlink) to split directory
-                dest_path = split_class_dir / frame_path.name
-                shutil.copy2(frame_path, dest_path)
-                split_stats[split][class_name] += 1
+    manifest["frames"] = {s: dict(sorted(split_stats[s].items())) for s in SPLITS}
+    with open(splits_dir / "split_manifest.json", "w") as fh:
+        json.dump(manifest, fh, indent=2)
 
     return split_stats
 
 
-def print_statistics(stats: ExtractionStats, split_stats: dict | None = None):
+def print_split_statistics(split_stats: dict, splits_dir: Path) -> None:
+    """Print frames per class in each split, and how the split was made."""
+    with open(splits_dir / "split_manifest.json") as fh:
+        manifest = json.load(fh)
+    print("\n" + "-" * 60)
+    print(f"Split by {manifest['split_by']}")
+    if manifest["split_by"] == "game":
+        print(f"  test (held out): {manifest['test_game']}")
+        print(f"  train/val:       {', '.join(manifest['train_games'])}")
+        print(f"  dropped {manifest['dropped_gap_frames']} frames in the {manifest['val_gap_secs']}s gap before val")
+    else:
+        print("  WARNING: frame split leaks near-duplicate frames; its scores overstate accuracy")
+    print(f"\n  {'class':<20} {'train':>6} {'val':>6} {'test':>6}")
+    for class_name in SCENE_CLASSES:
+        counts = [split_stats[s].get(class_name, 0) for s in SPLITS]
+        if any(counts):
+            print(f"  {class_name:<20} {counts[0]:>6} {counts[1]:>6} {counts[2]:>6}")
+    totals = [sum(split_stats[s].values()) for s in SPLITS]
+    print(f"  {'total':<20} {totals[0]:>6} {totals[1]:>6} {totals[2]:>6}")
+    print(f"\nManifest: {splits_dir / 'split_manifest.json'}")
+
+
+def print_statistics(stats: ExtractionStats):
     """Print extraction statistics."""
     print("\n" + "=" * 60)
     print("EXTRACTION STATISTICS")
@@ -299,13 +456,6 @@ def print_statistics(stats: ExtractionStats, split_stats: dict | None = None):
     missing = set(SCENE_CLASSES) - set(stats.frames_per_class.keys())
     if missing:
         print(f"\nMissing classes (no frames): {', '.join(missing)}")
-
-    if split_stats:
-        print("\n" + "-" * 40)
-        print("Split statistics:")
-        for split in ["train", "val", "test"]:
-            total = sum(split_stats[split].values())
-            print(f"  {split}: {total} frames")
 
     if stats.errors:
         print("\nErrors:")
@@ -346,18 +496,56 @@ def main():
         help="Skip creating train/val/test splits",
     )
     parser.add_argument(
+        "--split-by",
+        choices=["game", "frame"],
+        default="game",
+        help="game: hold out a whole game as the test set (default). "
+        "frame: the old random frame split, which leaks near-duplicate frames - for comparison only",
+    )
+    parser.add_argument(
+        "--test-game",
+        help="Game to hold out as the test set: '3', or 'VIDEO_ID:3' when several videos "
+        "are labeled. Default: the last game",
+    )
+    parser.add_argument(
         "--train-ratio",
         type=float,
         default=0.7,
-        help="Ratio of frames for training set",
+        help="Ratio of frames for training set (--split-by frame only)",
     )
     parser.add_argument(
         "--val-ratio",
         type=float,
         default=0.15,
-        help="Ratio of frames for validation set",
+        help="Share of each game's time span used for validation (game split), "
+        "or of each class's frames (frame split)",
+    )
+    parser.add_argument(
+        "--val-gap",
+        type=float,
+        default=DEFAULT_VAL_GAP_SECS,
+        help="Seconds of training frames dropped before each validation block (game split only)",
+    )
+    parser.add_argument(
+        "--splits-only",
+        action="store_true",
+        help="Re-split frames already in --output-dir without extracting from video again",
     )
     args = parser.parse_args()
+
+    if args.splits_only:
+        print(f"Re-splitting frames in {args.output_dir} (split by {args.split_by})")
+        split_stats = create_train_val_test_splits(
+            args.output_dir,
+            args.splits_dir,
+            split_by=args.split_by,
+            test_game=args.test_game,
+            train_ratio=args.train_ratio,
+            val_ratio=args.val_ratio,
+            val_gap_secs=args.val_gap,
+        )
+        print_split_statistics(split_stats, args.splits_dir)
+        return
 
     # Collect label files to process
     if args.label_file:
@@ -399,16 +587,21 @@ def main():
     # Create train/val/test splits
     split_stats = None
     if not args.no_splits and stats.total_frames > 0:
-        print("\nCreating train/val/test splits...")
+        print(f"\nCreating train/val/test splits (split by {args.split_by})...")
         split_stats = create_train_val_test_splits(
             args.output_dir,
             args.splits_dir,
+            split_by=args.split_by,
+            test_game=args.test_game,
             train_ratio=args.train_ratio,
             val_ratio=args.val_ratio,
+            val_gap_secs=args.val_gap,
         )
 
     # Print statistics
-    print_statistics(stats, split_stats)
+    print_statistics(stats)
+    if split_stats:
+        print_split_statistics(split_stats, args.splits_dir)
 
 
 if __name__ == "__main__":

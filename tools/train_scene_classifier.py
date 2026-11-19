@@ -28,7 +28,9 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from torchvision.models import ConvNeXt_Tiny_Weights, convnext_tiny
 
-# Scene classes (order matters - must match label indices)
+# Every scene class the labeler offers. The model's output order is not this
+# list: it is the class folders present in the training split, alphabetically
+# (ImageFolder), saved to class_mapping.json.
 SCENE_CLASSES = [
     "non_gameplay",
     "both_grounded",
@@ -42,8 +44,6 @@ SCENE_CLASSES = [
     "both_knocked_down",
     "respawning",
 ]
-
-NUM_CLASSES = len(SCENE_CLASSES)
 
 
 def get_device() -> torch.device:
@@ -97,17 +97,119 @@ def get_transforms(train: bool = True) -> transforms.Compose:
 
 
 def compute_class_weights(dataset: datasets.ImageFolder) -> torch.Tensor:
-    """Compute inverse frequency class weights for imbalanced data."""
-    class_counts = torch.zeros(NUM_CLASSES)
+    """Compute inverse frequency class weights for imbalanced data.
+
+    One weight per class in the dataset, matching the model's output count.
+    Inverse frequency is extreme for a class with a handful of frames (1 frame
+    vs 224 is a 224x weight), so main() first drops classes below
+    --min-class-frames: with a 1-frame class kept, the model learned to predict
+    that class for most frames.
+    """
+    num_classes = len(dataset.classes)
+    class_counts = torch.zeros(num_classes)
 
     for _, label in dataset.samples:
         class_counts[label] += 1
 
     # Inverse frequency weighting
-    weights = 1.0 / (class_counts + 1e-6)
-    weights = weights / weights.sum() * NUM_CLASSES  # Normalize
+    weights = 1.0 / class_counts
+    weights = weights / weights.sum() * num_classes  # Normalize
 
     return weights
+
+
+def reindex_by_name(dataset: datasets.ImageFolder, class_names: list[str]) -> dict[str, int]:
+    """Renumber a val/test dataset's labels to match the training class order.
+
+    ImageFolder numbers the class folders present in *its own* directory
+    alphabetically. When a split lacks a class the training split has (common
+    for rare classes once splits are made by game), its numbers shift and every
+    later class would be scored against the wrong model output.
+
+    Frames of a class absent from training are dropped. Returns {class: frames dropped}.
+    """
+    train_index = {name: i for i, name in enumerate(class_names)}
+    dropped: dict[str, int] = {}
+    samples = []
+    for path, idx in dataset.samples:
+        name = dataset.classes[idx]
+        if name in train_index:
+            samples.append((path, train_index[name]))
+        else:
+            dropped[name] = dropped.get(name, 0) + 1
+    dataset.samples = samples
+    dataset.imgs = samples
+    dataset.targets = [t for _, t in samples]
+    dataset.classes = list(class_names)
+    dataset.class_to_idx = dict(train_index)
+    return dropped
+
+
+def evaluate_test_set(
+    model: nn.Module,
+    test_dir: Path,
+    class_names: list[str],
+    device: torch.device,
+    batch_size: int,
+    workers: int,
+) -> dict | None:
+    """Score the model once on the held-out test split.
+
+    Returns overall accuracy, per-class recall with frame counts, macro-average
+    recall, and the confusion matrix - or None if there is no test split.
+    Test frames of a class the model never trained on are counted and skipped.
+    """
+    if not test_dir.exists() or not any(test_dir.rglob("*.jpg")):
+        return None
+
+    test_dataset = datasets.ImageFolder(test_dir, transform=get_transforms(train=False))
+    unseen = reindex_by_name(test_dataset, class_names)
+
+    loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=workers)
+    n = len(class_names)
+    confusion = torch.zeros(n, n, dtype=torch.long)  # rows: true class, columns: predicted
+
+    model.eval()
+    with torch.no_grad():
+        for inputs, labels in loader:
+            predicted = model(inputs.to(device)).argmax(1).cpu()
+            for t, p in zip(labels.tolist(), predicted.tolist(), strict=True):
+                confusion[t, p] += 1
+
+    support = confusion.sum(1)
+    correct = confusion.diag()
+    per_class = {
+        name: {"frames": int(support[i]), "correct": int(correct[i]), "recall": float(correct[i] / support[i])}
+        for i, name in enumerate(class_names)
+        if support[i] > 0
+    }
+    total = int(support.sum())
+    return {
+        "frames": total,
+        "accuracy": float(correct.sum() / total) if total else 0.0,
+        "macro_recall": sum(c["recall"] for c in per_class.values()) / len(per_class) if per_class else 0.0,
+        "per_class": per_class,
+        "classes_not_in_test": [name for i, name in enumerate(class_names) if support[i] == 0],
+        "unseen_in_training": unseen,
+        "class_names": class_names,
+        "confusion_matrix": confusion.tolist(),
+    }
+
+
+def print_test_metrics(metrics: dict) -> None:
+    """Print the test-set report: per-class recall, then the headline numbers."""
+    print("\n" + "=" * 60)
+    print("TEST SET (held out; evaluated once, after checkpoint selection)")
+    print("=" * 60)
+    print(f"  {'class':<20} {'frames':>7} {'correct':>8} {'recall':>7}")
+    for name, c in metrics["per_class"].items():
+        print(f"  {name:<20} {c['frames']:>7} {c['correct']:>8} {c['recall']:>7.1%}")
+    if metrics["classes_not_in_test"]:
+        print(f"  No test frames: {', '.join(metrics['classes_not_in_test'])}")
+    if metrics["unseen_in_training"]:
+        print(f"  Skipped (class never seen in training): {metrics['unseen_in_training']}")
+    print(f"\n  Accuracy:     {metrics['accuracy']:.1%} ({metrics['frames']} frames)")
+    print(f"  Macro recall: {metrics['macro_recall']:.1%} (mean of per-class recall)")
 
 
 def train_epoch(
@@ -179,6 +281,7 @@ def save_checkpoint(
     epoch: int,
     val_acc: float,
     output_dir: Path,
+    class_names: list[str],
     is_best: bool = False,
 ) -> None:
     """Save model checkpoint."""
@@ -187,7 +290,7 @@ def save_checkpoint(
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "val_acc": val_acc,
-        "class_names": SCENE_CLASSES,
+        "class_names": class_names,
     }
 
     # Save latest
@@ -245,6 +348,13 @@ def main():
     parser.add_argument("--early-stopping", type=int, default=5, help="Early stopping patience")
     parser.add_argument("--no-pretrained", action="store_true", help="Don't use pretrained weights")
     parser.add_argument("--workers", type=int, default=4, help="DataLoader workers")
+    parser.add_argument(
+        "--min-class-frames",
+        type=int,
+        default=10,
+        help="Leave out classes with fewer training frames than this - too few to learn, "
+        "and their inverse-frequency weight swamps the loss",
+    )
     args = parser.parse_args()
 
     # Setup
@@ -265,15 +375,41 @@ def main():
     train_dataset = datasets.ImageFolder(train_dir, transform=get_transforms(train=True))
     val_dataset = datasets.ImageFolder(val_dir, transform=get_transforms(train=False))
 
+    manifest_path = args.data_dir / "split_manifest.json"
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else None
+    if manifest is None or manifest.get("split_by") != "game":
+        print("WARNING: not a game-level split - validation/test scores will be inflated by")
+        print("         near-duplicate frames shared across splits. Re-split with extract_labeled_frames.py.")
+    else:
+        print(f"Game split - test game held out: {manifest['test_game']}")
+
+    # The model's output i is class_names[i]: the class folders in train/ with
+    # enough frames, alphabetically (ImageFolder's order). Everything below,
+    # including class_mapping.json, uses this order.
+    train_counts: dict[str, int] = {}
+    for _, idx in train_dataset.samples:
+        name = train_dataset.classes[idx]
+        train_counts[name] = train_counts.get(name, 0) + 1
+    class_names = [c for c in train_dataset.classes if train_counts.get(c, 0) >= args.min_class_frames]
+    too_few = {c: n for c, n in train_counts.items() if n < args.min_class_frames}
+    if too_few:
+        print(f"Left out (fewer than {args.min_class_frames} training frames): {too_few}")
+        reindex_by_name(train_dataset, class_names)
+    num_classes = len(class_names)
+    val_classes = list(val_dataset.classes)
+    dropped = reindex_by_name(val_dataset, class_names)
+    if dropped:
+        print(f"Validation frames dropped (class not in training): {dropped}")
+    no_val = [c for c in class_names if c not in val_classes]
+    if no_val:
+        print(f"No validation frames for: {no_val}")
+
     print(f"Training samples: {len(train_dataset)}")
     print(f"Validation samples: {len(val_dataset)}")
-    print(f"Classes: {train_dataset.classes}")
-
-    # Verify class order matches
-    if train_dataset.classes != SCENE_CLASSES:
-        print("Warning: Dataset classes don't match expected order")
-        print(f"  Expected: {SCENE_CLASSES}")
-        print(f"  Got: {train_dataset.classes}")
+    print(f"Classes ({num_classes}, model output order): {class_names}")
+    missing = [c for c in SCENE_CLASSES if c not in class_names and c not in too_few]
+    if missing:
+        print(f"Not trained (no training frames): {missing}")
 
     # Data loaders
     train_loader = DataLoader(
@@ -292,7 +428,7 @@ def main():
     )
 
     # Model
-    model = create_model(NUM_CLASSES, pretrained=not args.no_pretrained)
+    model = create_model(num_classes, pretrained=not args.no_pretrained)
     model = model.to(device)
 
     # Compute class weights for imbalanced data
@@ -354,7 +490,7 @@ def main():
 
         # Save checkpoint
         is_best = val_acc > best_val_acc
-        save_checkpoint(model, optimizer, epoch, val_acc, args.output_dir, is_best)
+        save_checkpoint(model, optimizer, epoch, val_acc, args.output_dir, class_names, is_best)
 
         if is_best:
             best_val_acc = val_acc
@@ -370,11 +506,28 @@ def main():
     total_time = time.time() - start_time
     print("-" * 60)
     print(f"Training complete in {total_time / 60:.1f} minutes")
-    print(f"Best validation accuracy: {best_val_acc:.4f}")
+    print(f"Best validation accuracy: {best_val_acc:.4f} (used to pick the checkpoint - not a test score)")
 
     # Load best model for export
     best_checkpoint = torch.load(args.output_dir / "checkpoint_best.pt", weights_only=False)
     model.load_state_dict(best_checkpoint["model_state_dict"])
+
+    # Score the chosen checkpoint once on the held-out test split
+    test_metrics = evaluate_test_set(
+        model, args.data_dir / "test", class_names, device, args.batch_size, args.workers
+    )
+    if test_metrics is None:
+        print("\nNo test split found - test accuracy not measured.")
+    else:
+        print_test_metrics(test_metrics)
+        test_metrics["best_epoch"] = best_checkpoint["epoch"] + 1
+        test_metrics["best_val_acc"] = best_val_acc
+        test_metrics["left_out_too_few_frames"] = too_few
+        test_metrics["split"] = manifest
+        metrics_path = args.output_dir / "test_metrics.json"
+        with open(metrics_path, "w") as f:
+            json.dump(test_metrics, f, indent=2)
+        print(f"Saved test metrics to: {metrics_path}")
 
     # Export to ONNX
     export_onnx(model, args.output_dir / "scene_classifier.onnx", device)
@@ -386,7 +539,7 @@ def main():
     print(f"Saved training history to: {history_path}")
 
     # Save class mapping
-    class_mapping = {i: name for i, name in enumerate(SCENE_CLASSES)}
+    class_mapping = {i: name for i, name in enumerate(class_names)}
     mapping_path = args.output_dir / "class_mapping.json"
     with open(mapping_path, "w") as f:
         json.dump(class_mapping, f, indent=2)

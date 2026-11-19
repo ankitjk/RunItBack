@@ -2,11 +2,74 @@
 
 This document chronicles the development process for RunItBack, including methods tried, what worked, what didn't, and the current state of the codebase.
 
-**Last Updated:** October 24, 2026
+**Last Updated:** November 16, 2026
 
 ---
 
 ## Changelog
+
+### November 16, 2026 - Game-Level Split and First Held-Out Scene Accuracy (ISSUE-018, ISSUE-019)
+
+**Session Goal:** Replace the leaky frame-level train/val/test split with a game-level one, and measure scene-classifier accuracy on footage the model has not seen.
+
+**Problem:**
+- `create_train_val_test_splits()` shuffled each class's frames at random. Frames 0.5s apart are near-duplicates, so a frame at t=10.0s could train the model while t=10.5s tested it. The ~92% (corrected October 23) was the best epoch's *validation* score on that split.
+- No test score had ever been measured: training loaded only `train/` and `val/`.
+
+**Changes:**
+- `tools/extract_labeled_frames.py` - splits by game by default. Fixes ISSUE-018.
+  - **test** = one whole held-out game (`--test-game 3`, or `VIDEO_ID:3` once several videos are labeled; default the last game).
+  - **val** = the last 15% of each other game's labeled span, with the 5s of training frames before it dropped (`--val-gap`), so no training frame neighbours a validation frame. Val only picks the checkpoint.
+  - Writes `split_manifest.json` recording how the split was made.
+  - `--split-by frame` keeps the old split, for comparison only. `--splits-only` re-splits without re-reading the video.
+  - Why game and not video: only one video is labeled (ISSUE-006). Its 3 games are on 3 stages, so a held-out game also tests an unseen stage.
+- `tools/train_scene_classifier.py` - fixes ISSUE-018 and ISSUE-019.
+  - **Test evaluation:** after the best checkpoint is chosen, scores the test split once. Prints per-class recall and saves accuracy, macro recall and the confusion matrix to `test_metrics.json`. Warns when given a non-game split.
+  - **Class order:** val and test labels are re-indexed by class name to training's order (`reindex_by_name`). ImageFolder numbers only the folders present in each split, so a split missing a class would score every later class against the wrong output. `class_mapping.json` is now written in the model's real (alphabetical) output order, not labeler order.
+  - **Classes too thin to learn:** classes under `--min-class-frames` (10) training frames are left out and reported. The first run kept `both_on_ledge` (1 frame). Its inverse-frequency weight was 8.0, against 0.04-0.08 for common classes. The model predicted it for 202 of 234 frames and reached 7% training accuracy (below the 11% of chance), so the run was stopped.
+  - **A claim checked and withdrawn:** I first said the old weight tensor, sized by `SCENE_CLASSES`, gave an absent class a ~1e6 weight that shrank every real class's weight toward zero. Tested, it did nothing: `CrossEntropyLoss` divides by the summed target weights, so the loss is identical at weights x1e-7, and an absent class is never a target. The weights are now sized to the model's outputs, which the variable class count requires anyway.
+  - `NUM_CLASSES` was removed - nothing uses a fixed class count any more.
+- `tools/requirements-training.txt` - added `onnxscript`. With torch 2.13 the default ONNX exporter needs it, and every run in this session failed at the export step without it. Test scores are saved before export, so none were lost. Verified afterwards: a fold's checkpoint exported, and ONNX matched PyTorch to 1.7e-6.
+- `tests/test_scene_splits.py` (new, 10 tests):
+  - each game stays whole; val is more than the gap away from train;
+  - test-game selection and its errors; manifest and folders agree;
+  - the frame split still exists and still leaks;
+  - `reindex_by_name` aligns a split that is missing a class.
+  - The torchvision test is skipped where torchvision is absent (CI).
+- `docs/ISSUES.md` - ISSUE-018 and ISSUE-019 fixed; ISSUE-017 added (below).
+- Reference section "Scene Classification" (below) - split description updated.
+
+**Results** (ConvNeXt-Tiny, same settings for every run; the one labeled video `XUkRx6CpL04`; 8 classes trained):
+
+| Split | Test frames | Test accuracy | Macro recall | Best val |
+|-------|-------------|---------------|--------------|----------|
+| Game 3 held out (Final Destination) | 490 | 45.1% | 52.3% | 55.7% |
+| Game 1 held out (Smashville) | 482 | 48.1% | 49.8% | 61.8% |
+| Game 2 held out (Battlefield) | 605 | 51.1% | 49.4% | 65.7% |
+| **Game folds, pooled** | 1,577 | **48.3%** (762) | - | - |
+| Frame split (leaky, for comparison) | 242 | 76.4% | 79.7% | 72.2% |
+
+Chance is 12.5% for 8 classes; always answering the most common class scores about 20%.
+
+- **Respawning, the class the stock-loss roadmap depends on:**
+  - recall **61/63 (96.8%)** across the three held-out games;
+  - precision **61/113 (54.0%)**, mostly false alarms in game 3 (64 predicted, 24 real).
+  - The 63 frames come from only about 10 respawn events, so this is a small sample.
+  - Scores are per frame, before the 5-frame median smoothing the pipeline applies.
+- **Weakest classes:**
+  - `one_airborne` recall 1-52%, mostly read as `both_grounded`.
+  - `one_on_ledge` precision 0-14%: it is predicted 4-5x more often than it occurs.
+  - Inverse-frequency weighting still pulls predictions toward rare classes.
+- **The leak, measured:** on the same code and labels, the frame split scores 76.4% against 48.3% for held-out games - a 28-point gap.
+  - The original ~92% is not reproduced. It was a best-epoch validation score, from older code and a 7-class label set, so it cannot be split into leak and other causes.
+- Test suite: 75 passed, 6 xfailed (fast suite). ruff and mypy clean.
+
+**Left Open:**
+- ISSUE-017: inference hardcodes the deployed model's 7-class order (`scene_classifier.py:101`). A retrained 8-class model cannot be deployed until it reads `class_mapping.json`. The deployed model was not replaced: all runs wrote to scratch directories.
+- Softer class weighting (square-root inverse frequency) is the next experiment for the over-predicted rare classes.
+- Every game is from one video - same players, overlay and camera. A new broadcast will likely score lower; measuring that needs more labeled videos (ISSUE-006).
+
+---
 
 ### October 24, 2026 - Final Stocks Without Gemini (ISSUE-005, ISSUE-016)
 
@@ -398,9 +461,11 @@ Uses Python multiprocessing to distribute OCR across multiple workers:
    - Export to JSON format
 
 2. **`tools/extract_labeled_frames.py`** - Frame extraction from labels
-   - Extracts frames at 0.5s intervals
-   - Creates train/val/test splits (70/15/15)
-   - Handles class balancing
+   - Extracts frames at 0.5s intervals (0.25s for rare classes)
+   - Creates train/val/test splits **by game** (since November 16, 2026): one
+     held-out game is the test set; the last 15% of each other game, after a
+     5s gap, is validation. The original 70/15/15 random frame split leaked
+     near-duplicate frames and survives only as `--split-by frame`.
 
 3. **`tools/train_scene_classifier.py`** - Training script
    - ConvNeXt-Tiny with ImageNet pretrained weights
@@ -450,6 +515,12 @@ Uses Python multiprocessing to distribute OCR across multiple workers:
 > meaningful number requires evaluating on a **held-out video** the model has
 > never seen. See the January 11 entry: that is the same labeling work already
 > on the roadmap.
+>
+> **Measured 2026-11-16** (game-level split, retrained on the current labels):
+> **48.3%** test accuracy pooled over three held-out games, with respawning
+> recall 61/63. The same code on the leaky frame split scores 76.4%. See the
+> November 16 entry. The deployed model itself has still not been scored on
+> held-out data.
 
 **Integration (`runitback/cv/scene_classifier.py`):**
 - ONNX Runtime inference
