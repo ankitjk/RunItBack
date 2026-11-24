@@ -15,7 +15,7 @@ with the `/issues` skill.
 - Planned features (edgeguard detection, Slippi, etc.) are not issues - they live
   under "Future Improvements" in `docs/DEVELOPMENT.md`.
 
-**Next ID:** ISSUE-020
+**Next ID:** ISSUE-021
 
 Severity: **High** = causes wrong results on real videos. **Medium** = blocks
 measuring or improving accuracy. **Low** = tooling, docs, or performance.
@@ -153,6 +153,17 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 - **Where:** `runitback/cli.py:440`, `tests/test_game_detection.py:571`
 
 ## Low
+
+### ISSUE-020: Exported scene model only accepts a batch of 1
+- **Area:** Scene classifier training - **Found:** 2026-11-24, exporting the held-out game-3 model
+- **What happens:** With torch 2.13, `torch.onnx.export` defaults to the dynamo
+  exporter, which fixes the batch size at 1 despite `dynamic_axes`. onnxruntime
+  fails on a batch of 2 ("Input shape:{2,56,56,384}, requested shape:{3136,384}").
+  RunItBack's inference runs one frame at a time, so the pipeline is unaffected;
+  batched callers break.
+- **Where:** `tools/train_scene_classifier.py:314`
+- **Suggested fix:** Pass `dynamo=False` (verified: batches of 1 and 5 match
+  PyTorch within 2e-6), or use `dynamic_shapes` with the dynamo exporter.
 
 ### ISSUE-011: Parallel OCR is disabled
 - **Area:** Performance - **Found:** 2026-01-06

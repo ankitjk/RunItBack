@@ -2,11 +2,57 @@
 
 This document chronicles the development process for RunItBack, including methods tried, what worked, what didn't, and the current state of the codebase.
 
-**Last Updated:** November 16, 2026
+**Last Updated:** November 24, 2026
 
 ---
 
 ## Changelog
+
+### November 24, 2026 - Scene Class Definitions; Batch-1 ONNX Export (ISSUE-020)
+
+**Session Goal:** Write down the labelling rules for the scene classes, and
+train a model that never saw game 3, for the separate `runitback-labeler`
+project (an agentic pre-labelling pipeline, evaluated on game 3).
+
+**Changes:**
+- `docs/SCENE_CLASSES.md` (new) - the owner's definitions of all 11 classes,
+  plus a tie-break ranking (respawning > offstage > on_ledge > knocked_down >
+  airborne > grounded). Until now only `non_gameplay` and `respawning` had a
+  written description (comments in `tools/scene_labeler.py`), so labels relied on
+  unwritten conventions, and an LLM labeller would have had to guess them.
+  "Offstage" now explicitly includes being below the stage between its edges.
+  Zoomed-in finishing blows are planned as a 12th class, `finishing_blow`:
+  the zoom doesn't always end in a kill, so labelling it `respawning` would
+  record an outcome the frame doesn't show, and "the state before the zoom"
+  (the old practice) can't be learned from a single frame. Not yet added to the
+  labeller, training or inference. This is the master copy; `runitback-labeler`
+  keeps a copy.
+- `CLAUDE.md` - links the definitions from the Improvement Path section.
+- `docs/ISSUES.md` - added ISSUE-020 (Low): with torch 2.13 the default
+  (dynamo) ONNX exporter fixes the batch size at 1 despite `dynamic_axes`; a
+  batch of 2 fails in onnxruntime. Found because the labeller sends batches.
+  RunItBack's inference runs one frame at a time, so the pipeline is unaffected.
+
+**Results:**
+- Retrained the game-3-held-out fold with the current code (no code change
+  since November 16; model written to `runitback-labeler`, not `data/models/`):
+  **39.2%** accuracy on game 3 (490 frames), macro recall 44.9%. The same fold
+  scored 45.1% on November 16 - about 6 points of run-to-run variation, so
+  single-run differences of that size are noise. Held-out scores across runs so
+  far: 39-51%.
+- `respawning`: recall 24/24, precision 24/127 (18.9%). `one_on_ledge`: 79
+  predicted for 14 true. Both rare classes are heavily over-predicted (the
+  inverse-frequency weighting noted on November 16).
+- Re-exporting with `dynamo=False` gives a working any-batch model: batches of
+  1 and 5 match PyTorch within 2e-6.
+
+**Left Open:**
+- ISSUE-020 - `tools/train_scene_classifier.py` still uses the default exporter.
+- `finishing_blow` class: add to `scene_labeler.py`, the training class list and
+  inference (inference is blocked on ISSUE-017 anyway). `XUkRx6CpL04`'s
+  existing zoom frames would need relabelling.
+
+---
 
 ### November 16, 2026 - Game-Level Split and First Held-Out Scene Accuracy (ISSUE-018, ISSUE-019)
 

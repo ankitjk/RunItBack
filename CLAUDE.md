@@ -32,6 +32,7 @@ The main bottleneck for stock loss accuracy is the scene classifier's respawn de
 3. **Edge case handling** - Reduce reliance on complex OCR-based heuristics
 
 Use `tools/scene_labeler.py` to label more videos, then retrain with `tools/train_scene_classifier.py`.
+Class definitions and tie-break rules for labelling: [docs/SCENE_CLASSES.md](docs/SCENE_CLASSES.md).
 
 ### Detection Approach
 - **Damage Tracking**: PaddleOCR reads damage percentages every 0.5s
