@@ -1,12 +1,45 @@
 # RunItBack Development Documentation
 
-This document chronicles the development process for RunItBack, including methods tried, what worked, what didn't, and the current state of the codebase.
+The changelog of RunItBack: what changed in each session, why, and what was measured. Entries are history and are not rewritten; later corrections are added as dated notes. How the pipeline works *now* is in [ARCHITECTURE.md](ARCHITECTURE.md), and open bugs are in [ISSUES.md](ISSUES.md).
 
-**Last Updated:** November 24, 2026
+**Last Updated:** November 25, 2026
 
 ---
 
 ## Changelog
+
+### November 25, 2026 - Documentation Cleanup: Slimmer CLAUDE.md, ARCHITECTURE.md, Stale Facts
+
+**Session Goal:** Cut what is loaded into every Claude session, and remove or correct statements that no longer match the code.
+
+**Problem:**
+- `CLAUDE.md` (14.2 KB, loaded every session) mixed rules with reference material, and several statements were wrong: "Current Status (January 2026)"; stock loss "confirmed by 2 consecutive low-damage frames" (the code and its own table say 3); "scene classifier processes all frames in one batch" (it runs one frame at a time); game boundaries described as HUD-based (GO!/GAME! markers are primary); Gemini described as the primary character detector while no key is configured; two "Key Files" lists; stage tables for a detector that is switched off.
+- The reference half of `DEVELOPMENT.md` (~370 lines under the changelog) described an older project: a file layout without the scene classifier or `tools/`, "Attempt 4 (Final)" stock-loss rules of 2 frames / 30% (now 3 frames / 50%), a single test video, and OCR "accuracy gain" percentages that were never measured.
+
+**Changes:**
+- `CLAUDE.md` - rewritten, 14.2 KB -> 4.6 KB. Keeps what every session needs: a map of the docs, what is switched off, code map, how to run things, the change workflow, secrets. Everything else moved to `docs/ARCHITECTURE.md` or dropped as a duplicate of `docs/ISSUES.md`, the README, or the skill list Claude Code already loads. The speculative "Future ML Integration" list was dropped.
+- `docs/ARCHITECTURE.md` (new) - how each stage works now, checked against the code: rules and parameters, tried-and-rejected approaches (kept from the old reference sections), scene-classifier numbers, stage notes (moved from `CLAUDE.md`), configuration, Keychain setup, caches. Found while checking: only `cache_dir` in `Settings` is read by any code; the OCR confidence threshold in use is the function default 0.3, not `ocr_confidence_threshold` (0.8).
+- `docs/DEVELOPMENT.md` - now the changelog plus Future Improvements; the reference sections were replaced by `ARCHITECTURE.md`. Changelog entries are unchanged except two headings: "December 30/31, 2024" corrected to 2025 (git history starts 2025-12-29). Future Improvements gained the planned `finishing_blow` class.
+- `docs/ISSUES.md` - ISSUE-007 reworded: the two blocked videos were downloaded for the October 24 benchmark and all 6 are cached, so "no full 6-video baseline" was no longer true. The bot check can still block a fresh download.
+- `.claude/skills/test/SKILL.md` - rewritten. It described cached Gemini responses in `.cache/` (the directory does not exist), an activated environment, and test categories that are not the suite's. Now: fast tests by default, and how to read `xfailed` / `XPASS(strict)`.
+- `.claude/agents/ocr-investigator.md` - the inline frame-extraction snippet replaced by the tested `inspect_frames.py` script; removed the warning about broken snippets in `/debug-video` (fixed October 23, ISSUE-010).
+- `.claude/agents/benchmark-runner.md` - removed the January 11 with-Gemini baseline table. It predates large code changes and was only there to be declared not comparable.
+- `.claude/skills/log-changes/SKILL.md` - step 7 now names `docs/ARCHITECTURE.md` as the current-state doc to keep in sync.
+- `scripts/check_docs.py`, `scripts/hooks/pre-commit` - `docs/ARCHITECTURE.md` added to the files whose `file.py:line` references are checked.
+- `tools/debug_stock_losses.py` - deleted. A one-off script hardcoded to one video and game with a `/tmp` cache; `inspect_frames.py` and `ocr-investigator` replaced it.
+- `runitback/cli.py`, `tools/train_scene_classifier.py` - a comment (character sampling is 10/25/50/75/90%, not 25/50/75%) and a docstring ("9 gameplay states") corrected. No behaviour change.
+- `README.md` - retraining section says data is split by game and why; links to `ARCHITECTURE.md` and `SCENE_CLASSES.md`.
+
+**Results:**
+- `scripts/check_docs.py` passes; `ruff check` passes; fast tests 75 passed, 6 xfailed.
+- Instruction text loaded per session (`CLAUDE.md`): 14.2 KB -> 4.6 KB. `DEVELOPMENT.md`: 62 KB -> 50 KB.
+
+**Left Open:**
+- Unused `Settings` fields (`video_quality`, `sample_interval_sec`, `ocr_confidence_threshold`, `stage_match_threshold`, `verbose`) were documented, not removed: removing a field can make an existing `.env` that sets it fail validation.
+- `pyproject.toml`'s `train` extra duplicates `tools/requirements-training.txt` and lacks `onnx`/`onnxscript`. Not changed.
+- The README still gives no scene-classifier accuracy figure (owner's decision pending).
+
+---
 
 ### November 24, 2026 - Scene Class Definitions; Batch-1 ONNX Export (ISSUE-020)
 
@@ -656,7 +689,7 @@ Example for "doug todd (Mario) vs Spencer (Ness)":
 
 ---
 
-### December 31, 2024 - Gemini Stock Counter Detection
+### December 31, 2025 - Gemini Stock Counter Detection
 
 **Session Goal:** Add visual stock counter detection using Gemini Vision API for improved accuracy
 
@@ -705,7 +738,7 @@ Example for "doug todd (Mario) vs Spencer (Ness)":
 
 ---
 
-### December 30, 2024 - Stock Loss Tracking Implementation
+### December 30, 2025 - Stock Loss Tracking Implementation
 
 **Session Goal:** Add stock loss tracking to game state analysis
 
@@ -747,378 +780,6 @@ Example for "doug todd (Mario) vs Spencer (Ness)":
 
 ---
 
-### Earlier Development (Pre-December 30, 2024)
-
-The following systems were developed in earlier sessions. See detailed sections below.
-
----
-
-## Project Overview
-
-RunItBack is a Python CLI tool that analyzes Super Smash Bros. Ultimate (SSBU) replays from YouTube videos. It identifies game states (neutral, advantage, disadvantage), tracks stock losses, and provides timestamped analysis.
-
-## Technical Stack
-
-- **Language:** Python 3.11+
-- **Interface:** CLI (Typer + Rich for formatting)
-- **Video:** yt-dlp for download, OpenCV for frame processing
-- **OCR:** PaddleOCR for damage percentage reading
-- **Detection:** Hybrid (CV extraction + rule-based classification)
-
----
-
-## Core Detection Systems
-
-### 1. Game State Detection
-
-#### Current Implementation
-File: `runitback/classification/detector.py`
-
-**Method:** Damage percentage tracking via OCR
-- Sample frames at 0.5s intervals
-- Read damage percentages using PaddleOCR
-- Track damage changes between frames
-- Classify states based on who got hit
-
-**State Classification Rules:**
-- **NEUTRAL:** No significant damage changes, both players visible
-- **ADVANTAGE:** Opponent's damage increased (you hit them)
-- **DISADVANTAGE:** Your damage increased (they hit you)
-
-**Parameters:**
-- `hit_threshold = 4.0` - Minimum damage increase to count as a hit
-- `neutral_reset_time = 3.0` - Seconds without damage to return to neutral
-
-#### What Worked
-- Damage tracking is reliable for detecting who got hit
-- Using a neutral reset timer prevents rapid state flickering
-- The 4% hit threshold filters out self-damage and healing
-
-#### What Didn't Work
-- **Frame-by-frame state detection was too noisy** - OCR occasionally misreads, causing false state transitions
-- **Detecting grounded vs airborne characters** - Considered using image processing to detect when characters are standing on platforms as a neutral reset criteria, but:
-  - Character sprites vary wildly (89 characters, many costumes)
-  - Stage backgrounds interfere with detection
-  - Visual effects obscure characters
-  - Decided on simpler approach with timer-based reset
-
-#### Alternative Considered but Not Implemented
-- **Character position tracking** using motion detection and Kalman filter
-  - Would enable more accurate state detection (e.g., detect edgeguarding)
-  - Too complex for initial implementation
-  - Deferred to future phases
-
-### 2. Stock Loss Detection
-
-#### Current Implementation (Hybrid)
-File: `runitback/classification/detector.py`
-
-**Method:** Dual detection with damage-reset (primary) + Gemini Vision (optional)
-
-**Primary - Damage Reset Detection (free, instant):**
-- When damage drops to ≤2%, start counting consecutive low frames
-- After 3 consecutive low frames (CONFIRM_FRAMES), check if previous damage was ≥50%
-- If so, confirm stock loss
-- Apply 10-second cooldown per player to prevent duplicates
-
-**Final stock (no Gemini needed, since October 24, 2026):**
-- The last stock of a game has no respawn or damage reset after it, so the rules above cannot see it
-- Find the GAME! screen with the local colour detector (`detect_game_screen`), searching back from the game's end
-- The loser is the player whose damage display is blank just after GAME! (the loser's number disappears; the winner's stays). Fallback: clearly higher damage before GAME!. Otherwise nothing is recorded
-- The 3-stock cap always keeps a game's final stock (the earliest loss within 6s of its end)
-
-**Optional - Gemini Stock Counter Detection (more accurate):**
-- Enable with `use_gemini_stock_detection=True` on `GameStateDetector`
-- Detects stock counter splash screen ("X - Y" format) using Gemini Vision API
-- Catches low-percent kills that damage-reset would miss
-- Also detects "GAME!" screen for final stock
-
-**Cost/Time Analysis (Gemini enabled):**
-- Per API call: ~$0.0001-0.0002, ~0.5-1.5s latency
-- Per game (3-5 kills): ~$0.0003-0.0006, ~1.5-7.5s total
-- Per set (3-5 games): ~$0.001-0.003, ~5-40s total
-- Results are cached to avoid duplicate calls
-
-**Data Structures:**
-- `StockLoss` dataclass in `states.py` - records timestamp and player
-- `p1_stock_loss` / `p2_stock_loss` flags on `FrameState`
-- `stock_losses` list on `StateSegment`
-
-#### Evolution of Stock Loss Detection
-
-**Attempt 1: Simple Damage Reset**
-```python
-# Detect when damage drops significantly to near-zero
-if prev_damage >= 50 and current_damage <= 5:
-    stock_loss = True
-```
-**Problem:** OCR noise caused many false positives. OCR would occasionally misread damage as 0-5%, triggering false stock losses.
-
-**Attempt 2: Stock Splash Screen Detection**
-```python
-# Detect the "2-3" stock count display that appears when stock is lost
-def detect_stock_splash(frame):
-    # Look for bright white numbers in center
-    # Use OCR to read "X-Y" pattern
-```
-**Problem:**
-- The splash has transparency over gameplay, making detection unreliable
-- Calling OCR for every frame is too slow
-- Final stock loss shows "GAME!" instead of stock count
-
-**Attempt 3: HUD Stock Icon Counting**
-```python
-# Track stock icons displayed below damage percentage
-p1_stocks = count_stocks(frame, player=1)
-p2_stocks = count_stocks(frame, player=2)
-```
-**Problem:** Stock icon detection via brightness thresholds was unreliable:
-- Stage backgrounds affect brightness
-- Game effects interfere
-- Values flickered (e.g., 3→1→3→2→3)
-
-**Attempt 4 (Final): Consecutive Frame Confirmation**
-- Require 2 consecutive frames with damage ≤5%
-- Remember the high damage value before the low streak started
-- Only trigger if that high value was ≥30%
-- Use 10-second cooldown per player
-
-**Why This Works:**
-- Filters single-frame OCR errors
-- Legitimate stock losses show sustained low damage
-- Cooldown prevents duplicate detections from lingering low values
-
-### 3. Segment Building and Filtering
-
-File: `runitback/classification/detector.py`, `_build_segments()`
-
-**Method:**
-1. Group consecutive frames with same state into segments
-2. Filter out short segments (noise):
-   - Neutral segments < 1.0s removed
-   - Advantage/disadvantage segments < 1.5s removed
-3. Merge consecutive segments of same state
-4. Propagate stock losses through filtering/merging
-
-#### What Worked
-- Minimum duration filtering greatly reduces noise
-- Merging consecutive same-state segments produces clean output
-
-#### Edge Case Handled
-- When short segments are filtered, their stock losses are carried forward to the previous segment
-
-### 4. Damage Percentage OCR
-
-File: `runitback/cv/ocr.py`
-
-**Method:**
-- Use PaddleOCR with English model
-- Disable document orientation detection (game UI doesn't need rotation)
-- Apply character substitution for common misreads (O→0, S→5, etc.)
-- Validate damage is in range 0-999%
-
-**Current Configuration:**
-```python
-PaddleOCR(
-    lang="en",
-    use_doc_orientation_classify=False,
-    use_doc_unwarping=False,
-    use_textline_orientation=False,
-)
-```
-
-**ROI Coordinates (normalized):**
-- P1 Damage: (0.27, 0.87, 0.44, 0.98)
-- P2 Damage: (0.64, 0.87, 0.76, 0.98)
-
-#### Accuracy Improvement Options
-
-**Template Matching (Option 2):**
-- Create templates for each digit 0-9 and % symbol
-- Match against damage region
-- More robust to color variations
-- Estimated improvement: 10-20% accuracy gain
-- Implementation effort: Medium (need to capture templates, handle scaling)
-
-**ML-based Digit Recognition (Option 3):**
-- Train CNN on SSBU damage number screenshots
-- Would handle all visual variations
-- Estimated improvement: 30-50% accuracy gain
-- Implementation effort: High (need training data, model architecture, training pipeline)
-- Feasibility: Highly feasible with modern tools
-  - Could use transfer learning from MNIST/SVHN
-  - Would need ~1000+ labeled screenshots
-  - Training time: hours on GPU
-
-### 5. Game Boundary Detection
-
-File: `runitback/cli.py`, `detect_games()`
-
-**Method:** Hybrid GO!/GAME! marker detection + HUD-based detection
-
-**Primary (GO!/GAME! markers):**
-1. Detect "GO!" screens via orange/yellow color analysis in center
-2. Detect "GAME!" screens via green color + moderate brightness
-3. Validate GAME! markers by checking for white flash after
-4. Match GO! markers with subsequent GAME! markers
-
-**Fallback (HUD-based):**
-- Detect gameplay frames by HUD presence:
-  - Character icons (colorful portraits)
-  - Stock icons (bright indicators)
-  - Damage displays (white numbers)
-- Merge consecutive gameplay frames into games
-- Filter by minimum duration (30s)
-
-#### What Worked
-- Color-based GO!/GAME! detection is reliable
-- White flash validation eliminates false GAME! positives
-- Combining markers with HUD detection handles edge cases
-
-#### What Didn't Work
-- **Pure HUD detection** produced too many false positives (menus with similar layouts)
-- **Template matching for GO!/GAME!** was brittle across different video qualities
-
-### 6. Character Detection
-
-File: `runitback/cv/character_detector.py`
-
-**Method:**
-1. Try Gemini API (LLM-based detection) if API key available
-2. Fall back to template matching against character portrait database
-3. Use video title hints to guide detection
-
-**Cross-game consistency:**
-- Track character detections across all games in a set
-- If one character dominates (≥75% of games), apply to outliers
-- Only correct commonly confused pairs (Mario/Luigi, Ken/Terry, etc.)
-
----
-
-## Project Structure
-
-```
-RunItBack/
-├── runitback/
-│   ├── cli.py                    # Typer CLI entry point, game boundary detection
-│   ├── config.py                 # Pydantic settings
-│   ├── video/
-│   │   ├── downloader.py         # yt-dlp wrapper with caching
-│   │   └── frame_extractor.py    # OpenCV frame sampling
-│   ├── cv/
-│   │   ├── ocr.py                # PaddleOCR damage reading
-│   │   ├── ui_detector.py        # HUD detection, stock counting
-│   │   ├── stage_detector.py     # Stage identification
-│   │   ├── character_detector.py # Character identification
-│   │   ├── llm_detector.py       # Gemini API integration (chars, stock counter)
-│   │   └── stock_counter_detector.py  # Stock counter splash detection
-│   ├── classification/
-│   │   ├── states.py             # GameState, FrameState, StateSegment
-│   │   └── detector.py           # Game state detection logic
-│   └── utils/
-│       └── logging.py            # Logging configuration
-├── data/
-│   ├── stages.json               # Stage geometry definitions
-│   └── game_markers/             # GO!/GAME! templates
-├── .cache/                       # Gemini API cache (gitignored)
-│   ├── llm_results/              # Character detection cache
-│   ├── stage_results/            # Stage detection cache
-│   └── stock_counter_results/    # Stock counter detection cache
-├── .video_cache/                 # Downloaded videos (gitignored)
-└── tests/
-    └── test_game_detection.py    # Stock loss and game detection tests
-```
-
----
-
-## Key Data Structures
-
-### FrameState
-```python
-@dataclass
-class FrameState:
-    timestamp: float
-    frame_index: int
-    p1_damage: Optional[float]
-    p2_damage: Optional[float]
-    p1_stocks: Optional[int]
-    p2_stocks: Optional[int]
-    p1_visible: bool
-    p2_visible: bool
-    state: GameState
-    p1_stock_loss: bool
-    p2_stock_loss: bool
-```
-
-### StateSegment
-```python
-@dataclass
-class StateSegment:
-    state: GameState
-    start_time: float
-    end_time: float
-    start_frame: int
-    end_frame: int
-    stock_losses: list[StockLoss]
-```
-
-### StockLoss
-```python
-@dataclass
-class StockLoss:
-    timestamp: float
-    player: int  # 1 or 2
-```
-
----
-
-## Configuration
-
-### Detection Parameters
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| `hit_threshold` | 4.0 | Min damage increase to count as hit |
-| `neutral_reset_time` | 3.0s | Time without damage to return to neutral |
-| `STOCK_LOSS_COOLDOWN` | 10.0s | Min time between stock losses for same player |
-| `CONFIRM_FRAMES` | 3 | Consecutive low-damage frames to confirm stock loss |
-| `MIN_KILL_DAMAGE` | 50 | Min damage before stock loss is plausible |
-| `MIN_NEUTRAL_DURATION` | 1.0s | Minimum segment length for neutral |
-| `MIN_ADV_DISADV_DURATION` | 1.5s | Minimum segment length for advantage/disadvantage |
-
-### Gemini Stock Counter Detection
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| `use_gemini_stock_detection` | False | Enable Gemini Vision for stock loss confirmation |
-| `gemini_api_key` | env var | API key (uses `GEMINI_API_KEY` env var if not set) |
-| `detection_cooldown` | 3.0s | Min time between Gemini API calls |
-
-### Sample Output
-```
-STATE SUMMARY:
-  Neutral:      0:42 (25%)
-  Advantage:    0:49 (28%)
-  Disadvantage: 1:20 (47%)
-
-NEUTRAL SEGMENTS:
-  0:18 - 0:25
-  0:40 - 0:44  ★ You lost a stock
-  0:54 - 0:58
-  ...
-
-ADVANTAGE SEGMENTS:
-  0:32 - 0:39
-  1:20 - 1:25
-  ...
-
-DISADVANTAGE SEGMENTS:
-  0:26 - 0:31
-  0:46 - 0:54
-  1:26 - 1:27  ★ Opponent lost a stock
-  ...
-```
-
----
-
 ## Future Improvements
 
 1. **Template Matching for OCR** - Create digit templates for more robust damage reading
@@ -1127,18 +788,4 @@ DISADVANTAGE SEGMENTS:
 4. **Slippi Integration** - For Melee replays, read game memory directly
 5. **Stage-specific Ledge Detection** - Use stage geometry data for ledgetrap identification
 6. **Strict type checking** - Turn on mypy `strict = true`. 28 errors remain (October 23, 2026), mostly missing generic parameters (`dict` instead of `dict[str, int]`) and unannotated functions. The real type bugs were already fixed in relaxed mode.
-
----
-
-## Testing
-
-The test video used during development:
-- URL: https://www.youtube.com/watch?v=7oPdiBsgSG0
-- Title: kit (Ken) vs Sophist (King Dedede) - West Towne Brawl 150 Winners R3
-
-Ground truth comparison (first 50 seconds):
-- Neutral: 0:18-0:26, 0:38-0:44, 0:55-0:59
-- Disadvantage: 0:26-0:32, 0:44-0:55, 0:59-1:08
-- Advantage: 0:34-0:38
-
-Detection results were within acceptable accuracy after parameter tuning.
+7. **`finishing_blow` scene class** - a 12th class for zoomed-in finishing blows (see `docs/SCENE_CLASSES.md`); needs the labeller, training class list and inference updated.

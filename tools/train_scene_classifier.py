@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Train ConvNeXt-Tiny scene classifier for SSBU gameplay.
 
-Trains a scene classifier to identify 9 gameplay states + non_gameplay.
-Uses transfer learning from ImageNet-pretrained ConvNeXt-Tiny.
+Fine-tunes ImageNet-pretrained ConvNeXt-Tiny on the scene classes defined in
+docs/SCENE_CLASSES.md. Only classes with enough training frames are trained
+(--min-class-frames); the held-out test game is scored once at the end.
 
 Usage:
     python tools/train_scene_classifier.py [--data-dir DIR] [--epochs N]

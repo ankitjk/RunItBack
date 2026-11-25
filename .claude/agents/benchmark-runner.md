@@ -46,37 +46,23 @@ screen and the loser's blank damage display (`_detect_final_stocks_locally`). Ch
 measured. A populated `.cache/stock_counter_results/` can supply Gemini
 answers even with no key; say whether it exists.
 
-This matters: the baseline table in `docs/DEVELOPMENT.md` (January 11) was
-measured *with* a Gemini key. Numbers from a run without one are not
-comparable to it. Say so explicitly rather than presenting a misleading delta.
+This matters: runs with and without a key are not comparable. Say which one
+you measured rather than presenting a misleading delta.
 
 ## What to report
 
 - One line naming the configuration: Gemini on or off, and the commit SHA
 - A table: video, detected/expected, recall %, false positives
-- Comparison against the January 11 baseline ONLY if the configuration
-  matches. Otherwise say the baseline is not comparable and why.
+- Comparison against the baseline below ONLY if the configuration matches.
+  Otherwise say the baseline is not comparable and why.
 - Missed timestamps, grouped by suspected cause, with the player each was
   expected for
 - Right-time-wrong-player cases listed separately from genuine misses
 
-## Baseline for reference (measured WITH Gemini, January 11)
+## Baseline (measured WITHOUT Gemini, October 24, 2026)
 
-| Video | Recall |
-|-------|--------|
-| Ken vs King Dedede | 100% (8/8) |
-| Cloud vs Pit | 93% (13/14) |
-| Ken vs Sonic | 85% (11/13) |
-| Dark Pit vs Ken | 78% (14/18) |
-| Mario vs Ness | 69% (9/13) |
-| Steve vs Palutena | 52% (12/23) |
-
-Steve vs Palutena is the worst case and the most informative - it is dense
-with the OCR failures described in the January 11 entry.
-
-## Baseline for reference (measured WITHOUT Gemini, October 24)
-
-The current configuration. Compare against this one when the key is unset.
+The current configuration. The only with-Gemini run (January 11: 75.3%, 67/89)
+predates large code changes and is not a baseline for anything.
 
 | Video | Recall | False positives |
 |-------|--------|-----------------|
@@ -87,6 +73,9 @@ The current configuration. Compare against this one when the key is unset.
 | Mario vs Ness | 69% (9/13) | 8 |
 | Steve vs Palutena | 65% (15/23) | 12 |
 | **Total** | **83.1% (74/89)** | **27** (precision 73.3%) |
+
+Steve vs Palutena is the worst case and the most informative - it is dense
+with the OCR failures in `docs/ISSUES.md` (ISSUE-001 to 004).
 
 ## Do not
 

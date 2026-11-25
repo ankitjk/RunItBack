@@ -129,11 +129,14 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 - **Suggested fix:** Label 3-5 more videos with varied stages and characters,
   favoring games with many stock losses (`tools/scene_labeler.py`).
 
-### ISSUE-007: Two benchmark videos cannot be downloaded
+### ISSUE-007: YouTube's bot check can block benchmark downloads
 - **Area:** Benchmark - **Found:** 2026-10-23 benchmark
-- **What happens:** YouTube's "Sign in to confirm you're not a bot" check blocks
-  yt-dlp for Cloud vs Pit (`KfMZ9bQUbtk`) and Mario vs Ness (`UgGQkF1wkoA`).
-  There is no full 6-video baseline for the current (Gemini off) setup.
+- **What happens:** YouTube's "Sign in to confirm you're not a bot" check
+  sometimes blocks yt-dlp. On October 23 it blocked Cloud vs Pit
+  (`KfMZ9bQUbtk`) and Mario vs Ness (`UgGQkF1wkoA`); both were downloaded for the October
+  24 benchmark, and all 6 sets are now cached in `~/.cache/runitback/`.
+  A new clone or a cleared cache can hit it again, and the run is then partial
+  (see ISSUE-008).
 - **Suggested fix:** Pass yt-dlp `--cookies-from-browser`. Uses your YouTube
   login - a decision for the user.
 

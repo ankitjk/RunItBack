@@ -1,6 +1,7 @@
 """Check that commands and code references in Claude's instructions are real.
 
-Skills, agents, CLAUDE.md and docs/ISSUES.md tell Claude what to run. When
+Skills, agents, CLAUDE.md, docs/ISSUES.md and docs/ARCHITECTURE.md tell Claude
+what to run and where to look. When
 they name a flag, function, or file that does not exist, nothing fails until
 someone follows them - the /debug-video skill shipped a --debug flag and two
 imports that never existed and nobody noticed for nine months. This makes
@@ -38,7 +39,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # Instructions Claude follows: every check applies.
 INSTRUCTION_FILES = ["CLAUDE.md", ".claude/agents/*.md", ".claude/skills/*/SKILL.md"]
 # Current-state references: only line refs are checked.
-REFERENCE_FILES = ["docs/ISSUES.md"]
+REFERENCE_FILES = ["docs/ISSUES.md", "docs/ARCHITECTURE.md"]
 
 SEARCH_DIRS = ["runitback", "tools", "scripts", "tests", ".claude"]
 

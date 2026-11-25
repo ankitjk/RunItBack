@@ -1,285 +1,86 @@
-# RunItBack - Developer Notes
+# RunItBack
 
-This file contains important information for AI assistants and developers working on this project.
+Python CLI that analyzes Super Smash Bros. Ultimate tournament sets from
+YouTube video alone: game boundaries, characters, stock losses, and time in
+neutral / advantage / disadvantage.
 
-**For detailed development history, see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)**
+## Where things are written down
 
-## Project Overview
+Read these when the task needs them; don't restate their content here.
 
-RunItBack is a Python CLI tool that analyzes Super Smash Bros. Ultimate (SSBU) replays from YouTube URLs. It identifies games within sets, detects stages and characters, and classifies game states (neutral/advantage/disadvantage) with stock loss tracking.
+| Doc | Holds |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How each pipeline stage works now: rules, parameters, config, caches, what was tried and rejected |
+| [docs/ISSUES.md](docs/ISSUES.md) | Every open bug, by severity. The only bug list |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Changelog, newest first: what changed, why, measured results. Long - read the entries you need, not the file |
+| [docs/SCENE_CLASSES.md](docs/SCENE_CLASSES.md) | Definitions and tie-break rules for the scene classes |
+| [README.md](README.md) | Outside readers: install, usage, per-set benchmark table, file layout |
 
-## Current Status (January 2026)
+## Things that are off or limited
 
-### Working Features
-- ✅ Video download from YouTube (yt-dlp)
-- ✅ Frame extraction at configurable intervals
-- ✅ Game boundary detection (GO!/GAME! markers + white flash validation)
-- ✅ Character detection (Gemini API + template matching fallback)
-- ✅ **Game state detection** (neutral/advantage/disadvantage) via damage tracking
-- ✅ **Stock loss tracking** - hybrid damage-reset + Smart Gemini detection
-- ✅ **Multi-game set support** - automatic game boundary detection with GO!→GAME! pairing
+These change how to run things and how to report results. Numbers and detail
+are in docs/ARCHITECTURE.md.
 
-### Known Issues
-Tracked in **[docs/ISSUES.md](docs/ISSUES.md)** - the single list of open bugs,
-by severity. Manage it with `/issues`; don't keep a second list here.
-Headline: stock-loss recall is 83.1% over the 6 benchmark videos (65-100% per
-video, Gemini off, October 24), and stage detection is switched off (always `unknown`).
+- **Gemini is off:** no `GEMINI_API_KEY` is configured. Characters come from
+  template matching and are often wrong (ISSUE-013); say so when reporting them.
+- **Stage detection is off:** every game reports `unknown` (ISSUE-009).
+- **The deployed scene model has 7 hardcoded classes** (ISSUE-017), so a
+  retrained model cannot be dropped in. Only one video is labelled (ISSUE-006).
 
-### Improvement Path
-The main bottleneck for stock loss accuracy is the scene classifier's respawn detection. More labeled training data will improve:
-1. **Respawn detection** - Primary signal for stock losses
-2. **Scene state accuracy** - Better neutral/advantage/disadvantage classification
-3. **Edge case handling** - Reduce reliance on complex OCR-based heuristics
+## Code map
 
-Use `tools/scene_labeler.py` to label more videos, then retrain with `tools/train_scene_classifier.py`.
-Class definitions and tie-break rules for labelling: [docs/SCENE_CLASSES.md](docs/SCENE_CLASSES.md).
+| Path | Purpose |
+|---|---|
+| `runitback/cli.py` | CLI, game boundary detection (GO!/GAME! screens), report output |
+| `runitback/classification/detector.py` | Game state and stock-loss detection |
+| `runitback/classification/states.py` | `FrameState`, `StateSegment`, `StockLoss` |
+| `runitback/cv/ocr.py` | Damage reading (PaddleOCR) |
+| `runitback/cv/ui_detector.py` | HUD regions, GO!/GAME! detection, frame types |
+| `runitback/cv/scene_classifier.py` | Scene classification (ConvNeXt-Tiny, ONNX) |
+| `runitback/cv/character_detector.py`, `llm_detector.py` | Characters: Gemini, or template matching without a key |
+| `tools/` | Labelling (`scene_labeler.py`), splits (`extract_labeled_frames.py`), training (`train_scene_classifier.py`), benchmark (`test_stock_losses.py`) |
+| `scripts/` | `check_docs.py`, git hooks, `fetch_model.sh` |
 
-### Detection Approach
-- **Damage Tracking**: PaddleOCR reads damage percentages every 0.5s
-- **Scene Classification**: ML model (ConvNeXt-Tiny ONNX) classifies positional states
-- **State Classification**: Based on who took damage (advantage = you hit them)
-- **Neutral Reset**: Position-based (`both_grounded` → neutral) with time-based fallback
-- **Stock Loss Detection**: Confirmed by 2 consecutive low-damage frames after high damage
-- **Segment Filtering**: Minimum duration thresholds reduce noise (1s neutral, 1.5s adv/disadv)
+## Running things
 
-### Key Parameters
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| `hit_threshold` | 4.0 | Min damage increase to count as hit |
-| `neutral_reset_time` | 3.0s | Time without damage to return to neutral |
-| `STOCK_LOSS_COOLDOWN` | 10.0s | Min time between stock losses per player |
-| `CONFIRM_FRAMES` | 3 | Consecutive low-damage frames to confirm stock loss |
-| `MIN_KILL_DAMAGE` | 50 | Minimum damage before stock loss is plausible |
+- Use `.venv/bin/python` for everything. The venv is not activated in Claude's
+  shell and bare `python` is not on PATH.
+- `analyze` stops to prompt unless `--player` is given:
+  `.venv/bin/python -m runitback analyze "<url>" --player 1 [--games 1,3] [--verbose]`.
+  A full set takes ~20 minutes; run it in the background.
+- Fast tests (~10s, no downloads): `.venv/bin/python -m pytest -m "not slow"`.
+  The slow tests download the benchmark sets.
+- The benchmark takes about two hours. Use the `benchmark-runner` agent.
+- Agents: `benchmark-runner`, `ocr-investigator` (why one moment was misread),
+  `label-auditor` (is there enough labelled data).
 
-### Performance Optimizations
-- **Skip OCR outside game bounds**: Frames before GO! or after GAME! skip OCR entirely (active)
-- **Parallel OCR**: Multiprocessing implementation exists but disabled (pool overhead issue)
-- **Batch scene classification**: Scene classifier processes all frames in one batch
+## Workflow for every change
 
-## Tournament-Legal Stages (Hazards Off)
+1. Make the change. Measure before claiming an improvement; report numbers with
+   their configuration (Gemini on or off, which sets).
+2. `/issues` - move a fixed bug to Fixed, or add one you found.
+3. `/log-changes` - the DEVELOPMENT.md entry goes in the same commit as the change.
+4. Commit. The message must end with an issue line, above `Co-Authored-By`:
+   `Fixes: ISSUE-001`, `Found: ISSUE-012`, or `Issues: none`.
+   `scripts/hooks/commit-msg` rejects a line that does not match `docs/ISSUES.md`.
 
-### Stage Visual Characteristics
+Scale the record to the change: a typo gets one bullet and `Issues: none`.
 
-| Stage | Platforms | Notes |
-|-------|-----------|-------|
-| **Small Battlefield** | 2 (sides) | Similar appearance to Battlefield but fewer platforms |
-| **Battlefield** | 3 (2 sides + 1 top center) | Very similar to Small Battlefield - use platform count to distinguish |
-| **Final Destination** | 0 | Flat stage, no platforms |
-| **Pokemon Stadium 2** | 2 (sides) | Platforms are symmetrical |
-| **Smashville** | 1 (center) | Single stationary platform in the center |
-| **Town and City** | 1-3 (variable) | Platforms can appear/disappear during gameplay. Can have 1 center, 2 sides, or combination. Platforms gradually move away during gameplay |
-| **Kalos Pokemon League** | 2 (sides) | Two platforms off to the sides of the stage |
-| **Hollow Bastion** | 1 (center) | Has time-of-day variations (warm sunset vs cool blue colors) |
+Hooks are enabled once per clone with `git config core.hooksPath scripts/hooks`.
+The pre-commit hook scans for secrets and runs `scripts/check_docs.py`, which
+checks every command, flag, import, script path and `file.py:line` reference in
+`CLAUDE.md`, `.claude/`, `docs/ISSUES.md` and `docs/ARCHITECTURE.md` against the code. It proves names
+exist, not that a command works: **run a command before writing it into a
+skill, agent or doc**, and prefer a script in the skill's folder over a long
+inline snippet.
 
-### Stage Detection Considerations
-
-1. **Battlefield vs Small Battlefield**: These stages have nearly identical color palettes and backgrounds. Histogram matching alone cannot distinguish them. Use **platform counting** as a tiebreaker:
-   - Battlefield: 3 platforms
-   - Small Battlefield: 2 platforms
-
-2. **Variable Backgrounds**: Some stages change appearance during gameplay:
-   - **Hollow Bastion**: Cycles through warm (pink/orange sunset) and cool (blue/teal) color schemes
-   - **Town and City**: Background changes as platforms transition
-   - **Pokemon Stadium 2**: Background can vary slightly
-
-3. **Stream Overlays**: Tournament streams often have overlays (score displays, branding) that affect detection. Reference images extracted from actual gameplay work better than clean stage screenshots.
-
-## HUD Detection
-
-The SSBU gameplay HUD contains:
-- **Damage percentages**: Bottom left (P1) and bottom right (P2)
-- **Stock icons**: Above damage displays
-- **Character portraits**: Near stock icons
-- **Timer**: Top center
-
-When these elements are visible, the frame is almost certainly gameplay.
-
-## Game Boundary Detection
-
-Games within a set are separated by:
-- Victory screens ("GAME!" flash, character victory pose)
-- Character select screens
-- Stage select screens
-- Stream transition overlays (often black screens with match info)
-
-The current approach detects continuous gameplay segments using HUD presence and merges brief gaps (< 5 seconds) that occur during:
-- Camera zooms on characters
-- Intense visual effects
-- Brief HUD occlusion
-
-## Character Detection
-
-Character detection uses Google's Gemini Vision API (gemini-2.5-flash) for accurate identification from gameplay screenshots.
-
-### How It Works
-
-1. **Primary: Gemini Vision API**
-   - Samples frames at 10%, 25%, 50%, 75%, 90% through each game (5 samples for robust voting)
-   - Uses few-shot prompting to identify characters from HUD portraits and in-game appearance
-   - Handles varying skins, visual effects, and camera angles
-   - Results are cached (by frame hash) to avoid redundant API calls
-
-2. **Fallback: Template Matching**
-   - Used when Gemini API is unavailable or fails
-   - Matches HUD portraits against icon reference templates
-   - Less accurate, especially for characters with many skins or similar appearances
-
-### Configuration
-
-- **API Key**: Set `GEMINI_API_KEY` environment variable. Read directly via
-  `os.environ` at each call site - it is NOT a `Settings` field, so a `.env`
-  entry will be silently ignored (`config.py` uses the `RUNITBACK_` prefix).
-- **Disable Gemini**: Leave `GEMINI_API_KEY` unset. Detection logs a warning
-  and falls back to template matching. `RUNITBACK_USE_GEMINI=0` also exists,
-  but only `character_detector.py:22` reads it - it does not turn off the
-  stock-loss or stage Gemini calls.
-- **Current state**: No key is configured. Gemini-dependent paths are inactive,
-  so character detection runs on template matching only, and the stock-loss
-  Gemini post-pass (low-percent kills, unattributed respawns) is off. Final
-  stocks no longer need Gemini - they come from the GAME! screen and the
-  loser's blank damage display.
-- **Cache Location**: `.cache/` directory (relative to project root)
-  - `llm_results/` - Character detection cache
-  - `stage_results/` - Stage detection cache
-  - `stock_counter_results/` - Stock counter detection cache
-
-### Cache Directories
-
-Cache directories are excluded from git (see `.gitignore`):
-- `.cache/` - Gemini API results (~6 MB, speeds up re-analysis)
-- `.video_cache/` - Videos for the labeling tools (`scene_labeler.py`,
-  `extract_labeled_frames.py`)
-
-The analysis pipeline and the benchmark download elsewhere: `settings.cache_dir`,
-default `~/.cache/runitback/`, outside the repo. Files there are named by URL
-hash, so the two caches do not share videos.
-
-### Key Files
-
-- `runitback/cv/llm_detector.py`: Gemini Vision API integration
-- `runitback/cv/character_detector.py`: Main detection logic with fallback
-
-## Future ML Integration
-
-The current architecture uses:
-- **Gemini Vision API** for character detection
-- **Rule-based detection** with reference image matching for stages
-
-Future enhancements:
-- CNN classifiers for stages (image classification)
-- Gemini for game state classification (neutral/advantage/disadvantage)
-- Gemini for edgeguard and ledgetrap situation detection
-- Move recognition using Gemini with labeled training data
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `runitback/cli.py` | CLI interface and game detection logic |
-| `runitback/classification/detector.py` | **Game state detection** (neutral/advantage/disadvantage) |
-| `runitback/classification/states.py` | Data structures (GameState, FrameState, StateSegment, StockLoss) |
-| `runitback/cv/ocr.py` | PaddleOCR damage percentage reading (with parallel batch support) |
-| `runitback/cv/scene_classifier.py` | ML scene classification (ConvNeXt-Tiny ONNX) |
-| `runitback/cv/ui_detector.py` | HUD detection, stock counting, frame type classification |
-| `runitback/cv/stage_detector.py` | Stage detection with histogram matching and platform counting |
-| `runitback/cv/character_detector.py` | Character detection (Gemini + fallback template matching) |
-| `runitback/cv/llm_detector.py` | Gemini Vision API integration |
-| `data/stage_references/` | Stage reference images for matching |
-| `data/character_references/` | Character reference images for template matching fallback |
-| `docs/DEVELOPMENT.md` | **Development chronicle** - methods tried, what worked/didn't |
-
-## Available Skills
-
-Custom Claude Code skills for common development tasks:
-
-| Skill | Description |
-|-------|-------------|
-| `/test` | Run the pytest test suite with options for quick/full/pattern matching |
-| `/analyze <url>` | Analyze a YouTube SSBU replay video |
-| `/debug-video <url>` | Debug detection on a video with verbose logging and frame extraction |
-| `/log-changes` | Add a dated entry to the `docs/DEVELOPMENT.md` Changelog: what was modified and why |
-| `/issues` | List, add, or remove (once fixed) entries in `docs/ISSUES.md`, the open-issues list |
-
-**After finishing any change to code, config, or tooling, run `/log-changes`
-before committing**, so the DEVELOPMENT.md entry lands in the same commit as
-the change it describes.
-
-Skills are defined in `.claude/skills/<name>/SKILL.md`, each with YAML frontmatter (`name`, `description`). The directory-plus-`SKILL.md` layout is required — a flat `.claude/skills/<name>.md` file is not discovered.
+Planned features are not issues; they go under "Future Improvements" in
+`docs/DEVELOPMENT.md`.
 
 ## Secrets
 
-Never commit credentials. A Gemini key was committed in `f8e1834` and sat in
-public history for nine months before being removed; that key has since been
-deleted and must not be reused.
-
-Store keys outside the repo. Preferred (macOS):
-
-```bash
-security add-generic-password -a "$USER" -s GEMINI_API_KEY -w   # prompts, no echo
-# then in ~/.zprofile:
-export GEMINI_API_KEY="$(security find-generic-password -a "$USER" -s GEMINI_API_KEY -w 2>/dev/null)"
-```
-
-A `.env` file is gitignored but will not work for `GEMINI_API_KEY` without a
-code change - see the Configuration note above.
-
-### Pre-commit secret scan
-
-`scripts/hooks/pre-commit` blocks commits containing probable secrets. It is
-version-controlled but `core.hooksPath` is local config, so enable it once per
-clone:
-
-```bash
-git config core.hooksPath scripts/hooks
-```
-
-It uses `detect-secrets` (in the `dev` extras) when available, and falls back to
-provider-specific patterns otherwise. Bypass with `git commit --no-verify` only
-for confirmed false positives.
-
-### Instruction check
-
-Skills, agents, and CLAUDE.md are instructions Claude executes, so a wrong
-command in them fails silently until someone follows it. `scripts/check_docs.py`
-checks every command and reference in them against the code: interpreter
-(`.venv/bin/python`, never bare `python`), `runitback` subcommands and flags,
-`analyze` given `--player`, `from runitback... import` names, script paths, and
-`file.py:line` references (also in `docs/ISSUES.md`). It runs from the
-pre-commit hook when a commit touches `.claude/`, `CLAUDE.md`, `docs/ISSUES.md`,
-`runitback/`, `tools/`, or `scripts/` (~0.3s), and in the test suite.
-
-It proves names exist, not that a command is right. So: **never write a command
-into a skill, agent, or doc without running it first**, and prefer a script in
-the skill's folder over a long inline `python -c` snippet - a script can be run
-and tested.
-
-## Issue Tracking
-
-`docs/ISSUES.md` is the list of known bugs (bugs only - planned features stay
-in "Future Improvements" in `docs/DEVELOPMENT.md`). Open issues sit at the top
-by severity; fixed ones become one line in a **Fixed** list at the bottom.
-
-Every commit message must end with an issue line, above `Co-Authored-By`:
-
-```
-Issues: none          # feature, docs, refactor - no tracked bug fixed or found
-Fixes: ISSUE-001      # ISSUE-001 is now in the Fixed list
-Found: ISSUE-012      # ISSUE-012 was added (or reopened)
-```
-
-`scripts/hooks/commit-msg` rejects a commit with no issue line, or one that
-does not match `docs/ISSUES.md` as staged. It is enabled by the same
-`core.hooksPath` setting as the secret scan. Workflow for a change:
-make it -> `/issues` (fix/add) -> `/log-changes` -> commit with the line it gives.
-Scale the record to the change: a typo gets one bullet and `Issues: none`;
-`/log-changes` defines small, medium, and large.
-
-## Known Limitations
-
-Design limits of the current approach. Specific bugs are in `docs/ISSUES.md`.
-
-1. **OCR Accuracy**: Damage reading can have errors during visual effects or motion blur (especially Steve's mining effects)
-2. **Stock Loss Detection**: Relies on damage reset pattern; may miss edge cases. Respawn-based detection via scene classifier needs more training data
-3. **Stage Detection**: Battlefield vs Small Battlefield disambiguation can be unreliable
-4. **No Edgeguard/Ledgetrap Detection**: Requires character position tracking (future work)
-5. **Player Attribution**: In some cases, stock losses are attributed to the wrong player due to OCR timing issues
+Never commit credentials. A Gemini key sat in public history for nine months
+(`f8e1834`); it is deleted and must not be reused. `GEMINI_API_KEY` is read
+from the environment only - a `.env` entry is ignored. Keychain setup is in
+docs/ARCHITECTURE.md. Bypass the secret scan (`git commit --no-verify`) only
+for a confirmed false positive.
