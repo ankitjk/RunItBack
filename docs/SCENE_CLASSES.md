@@ -6,7 +6,8 @@ copy for its LLM prompt. Change it here first.
 
 Written 2026-11-24 from the project owner's labelling conventions. Labels made
 before then (`XUkRx6CpL04`) may not follow every rule exactly - in particular,
-zoomed finishing blows were labelled as the state before the zoom.
+zoomed finishing blows were labelled as the state before the zoom. Its GAME!
+screens were relabelled from `non_gameplay` to `respawning` on 2026-11-25.
 
 ## Terms
 
@@ -35,7 +36,8 @@ stage and one above it -> `one_offstage`. Both under the stage ->
 
 **non_gameplay** - Loading screens, character select, stage select, results
 screens, and anything else that isn't actual gameplay between the two players.
-**Pauses are non_gameplay.**
+**Pauses are non_gameplay.** The entrance animations and the countdown before
+GO! are non_gameplay; gameplay starts when GO! appears.
 
 **both_grounded** - Both players are grounded, within the stage.
 
@@ -70,7 +72,8 @@ shows a slight yellow flash). The other player is within the stage.
   against the screen
 - a player on the angel (respawn) platform
 - the stock count shown in the centre of the screen as a player respawns
-- **the GAME! screen**
+- **the GAME! screen**, from the first frame GAME! appears until the wipe to the
+  results screen begins; `non_gameplay` starts at the wipe's first frame
 
 Cue: until the respawn platform appears, one or both players have **no damage
 percentage** shown on their HUD. If either player is respawning, the frame is

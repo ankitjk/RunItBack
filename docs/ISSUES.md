@@ -15,7 +15,7 @@ with the `/issues` skill.
 - Planned features (edgeguard detection, Slippi, etc.) are not issues - they live
   under "Future Improvements" in `docs/DEVELOPMENT.md`.
 
-**Next ID:** ISSUE-021
+**Next ID:** ISSUE-022
 
 Severity: **High** = causes wrong results on real videos. **Medium** = blocks
 measuring or improving accuracy. **Low** = tooling, docs, or performance.
@@ -120,11 +120,28 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 - **Suggested fix:** Read the order from the `class_mapping.json` that training
   writes next to the model, falling back to the current list for the old model.
 
+### ISSUE-021: Re-extracting frames after a label edit leaves stale frames
+- **Area:** Scene classifier data - **Found:** 2026-11-25, relabelling the GAME! screen in `XUkRx6CpL04`
+- **What happens:** `extract_labeled_frames.py` writes into the existing frames
+  folder without removing a video's old frames. After a label edit, frames from
+  the old labels stay filed under their old class, and the split is built from
+  everything in the folder, so the model trains and is tested on labels that
+  are no longer in the label file. Nothing warns about it.
+- **Evidence:** After relabelling 11.6s from `non_gameplay` to `respawning`,
+  re-extraction left 22 old `non_gameplay` frames inside the new `respawning`
+  stretches. The folder held 1,675 frames; a clean extraction gives 1,603, so
+  72 were stale.
+- **Where:** `tools/extract_labeled_frames.py:124` (`extract_frames_from_video`)
+- **Suggested fix:** Before extracting a video, delete that video's existing
+  frames from the output folder. Until then, delete
+  `data/scene_classifier/frames/` before re-extracting.
+
 ### ISSUE-006: Too little labeled data to retrain the scene classifier
 - **Area:** Scene classifier - **Found:** 2026-10-23, `label-auditor`
 - **What happens:** The whole corpus is one video (`XUkRx6CpL04`). `respawning`
-  - the class meant to become the primary stock-loss signal - has ~63
-  estimated frames against a ~200 floor. 7 of 11 classes are under 200;
+  - the class meant to become the primary stock-loss signal - has 107
+  frames (63 before the GAME! screens were relabelled, 2026-11-25) against a
+  ~200 floor. 7 of 11 classes are under 200;
   `both_knocked_down` has none.
 - **Suggested fix:** Label 3-5 more videos with varied stages and characters,
   favoring games with many stock losses (`tools/scene_labeler.py`).
