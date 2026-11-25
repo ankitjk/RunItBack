@@ -5,51 +5,45 @@ description: Run the RunItBack pytest suite - all tests, quick (non-slow) tests,
 
 # /test - Run the test suite
 
-Run pytest for the RunItBack project with common configurations.
-
 ## Usage
 
 ```
-/test              # Run all tests
-/test quick        # Run quick tests (exclude slow integration tests)
-/test <pattern>    # Run tests matching a pattern (e.g., /test game_detection)
-/test -v           # Run with verbose output
+/test              # Fast tests (the default - what CI runs)
+/test all          # Everything, including the slow benchmark tests
+/test <pattern>    # Tests matching a pattern, e.g. /test scene_splits
 ```
 
 ## Instructions
 
-1. Run pytest:
+Run from the project root with `.venv/bin/python` - the venv is not activated
+in Claude's shell, and bare `python` is not on PATH.
+
+1. Fast tests (~15s, no downloads or API keys):
    ```bash
-   .venv/bin/python -m pytest tests/ -v
+   .venv/bin/python -m pytest tests/ -m "not slow" -q
    ```
 
-2. For quick tests (skip slow ones):
+2. A pattern:
    ```bash
-   .venv/bin/python -m pytest tests/ -v -m "not slow"
+   .venv/bin/python -m pytest tests/ -m "not slow" -q -k "<pattern>"
    ```
 
-3. For a specific test file or pattern:
+3. Everything - only when asked. The slow tests (`tests/test_game_detection.py`)
+   download the benchmark sets and take minutes each; run in the background:
    ```bash
-   .venv/bin/python -m pytest tests/ -v -k "<pattern>"
+   .venv/bin/python -m pytest tests/ -q
    ```
 
-4. After running, summarize:
-   - Total passed/failed/skipped
-   - Any failures with brief descriptions
-   - Suggestions if tests fail
+4. Summarize: passed / failed / skipped / xfailed, each failure in a line, and
+   the likely cause if it is clear.
 
-## Test Categories
+## Reading the result
 
-The test suite covers:
-- **Game count detection** - Correct number of games identified
-- **Timestamp accuracy** - Game start/end times within tolerance
-- **Character detection** - Player characters correctly identified
-- **Stock loss detection** - Kill events properly tracked
-- **Stage detection** - Stage identification (currently not implemented)
-
-## Notes
-
-- Tests use cached Gemini API responses from `.cache/` for speed
-- Some tests are marked `@pytest.mark.slow` for integration tests
-- The `GEMINI_API_KEY` environment variable must be set for live API tests
-- Run from the project root with the project environment active (`pip install -e .` per README)
+- **`xfailed` is expected.** Known bugs are written as strict expected-failure
+  tests linked to their issue in `docs/ISSUES.md`.
+- **`XPASS(strict)` counts as a failure** and means a tracked bug is now fixed:
+  remove the `xfail` marker and move the issue to Fixed with `/issues fix`.
+- `test_scene_splits.py` skips one test when torchvision is not installed.
+- `test_docs.py` runs `scripts/check_docs.py`; a failure there means a command
+  or `file.py:line` reference in a skill, agent, `CLAUDE.md` or `docs/ISSUES.md`
+  no longer matches the code.

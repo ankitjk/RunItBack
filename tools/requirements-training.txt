@@ -5,6 +5,9 @@ torch>=2.0.0
 torchvision>=0.15.0
 onnx>=1.14.0
 onnxruntime>=1.15.0
+# torch.onnx.export's default exporter needs it in recent PyTorch (seen with 2.13);
+# without it training finishes, then fails at the export step.
+onnxscript>=0.5
 
 # For visualization (optional)
 matplotlib>=3.7.0

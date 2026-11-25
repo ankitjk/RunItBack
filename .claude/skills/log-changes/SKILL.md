@@ -91,7 +91,7 @@ do not apply at the chosen size (e.g. syncing CLAUDE.md for a typo) are skipped.
 6. **Update the `**Last Updated:**` date** at the top of the file.
 
 7. **Sync current-state facts if they changed.** If a change makes a statement
-   in `CLAUDE.md` or the reference sections of `DEVELOPMENT.md` untrue (a
+   in `CLAUDE.md` or `docs/ARCHITECTURE.md` untrue (a
    parameter value, a flag name, a file path, a "Known Issues" item), fix that
    statement too and mention it in the entry.
 

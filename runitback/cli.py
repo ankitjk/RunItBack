@@ -439,7 +439,7 @@ def detect_games(
         # Stage detection disabled for now to prioritize game/character detection
         # TODO: Re-enable stage detection once game boundaries are reliable
         stage = Stage.UNKNOWN
-        # Pass all gameplay frames - detect_characters_from_frames samples at 25%, 50%, 75%
+        # Pass all gameplay frames - detect_characters_from_frames samples at 10/25/50/75/90%
         # Also pass character hints from video title if available
         characters = detect_characters_from_frames(
             [f.image for f in game_frames_list],

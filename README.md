@@ -213,11 +213,14 @@ pip install -r tools/requirements-labeling.txt   # PyQt5
 pip install -r tools/requirements-training.txt   # PyTorch, ONNX
 
 python tools/scene_labeler.py "<video file or YouTube URL>"   # label segments by scene class
-python tools/extract_labeled_frames.py                        # labels -> frames + train/val/test splits
+python tools/extract_labeled_frames.py                        # labels -> frames, split by game (one game held out)
 python tools/train_scene_classifier.py                        # fine-tune ConvNeXt-Tiny, export ONNX
 ```
 
-The model is fine-tuned from ImageNet weights.
+The model is fine-tuned from ImageNet weights. Class definitions are in
+[docs/SCENE_CLASSES.md](docs/SCENE_CLASSES.md). Data is split by game because
+frames 0.5s apart are near-duplicates: a random frame split lets the model be
+tested on frames it has all but seen.
 
 ### Project layout
 
@@ -259,7 +262,8 @@ runitback/
   benchmark's game endings and became the final-stock signal.
 - **The development record is kept.** [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
   chronicles what was tried, what failed, and why - including a correction of
-  earlier overstated training results.
+  earlier overstated training results. How each stage works today is in
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Claude Code is used as a development assistant. Its project instructions
 ([CLAUDE.md](CLAUDE.md), `.claude/`) are versioned with the code, and

@@ -36,31 +36,22 @@ Use `--games N` to restrict the run to the game containing the timestamp.
 `ocr.py:200` logs `OCR detected: '<text>' (conf: <n>)` per call. That is the
 record of what OCR actually read.
 
-To inspect specific frames, extract them to `debug_frames/` (gitignored),
-then read the images directly to see what was on screen:
+To inspect specific frames, run the inspection script with timestamps in
+seconds. For each one it prints the raw OCR text, parsed damage, confidence and
+scene class, and saves the full frame plus the two damage crops OCR was given
+to `debug_frames/` (gitignored). Read those images to see what was on screen:
 
 ```bash
-.venv/bin/python -c "
-import cv2
-from runitback.config import settings
-from runitback.video.downloader import download_video
-from runitback.video.frame_extractor import extract_single_frame
-p = download_video('<url>', settings.cache_dir)
-for t in [<t1>, <t2>, ...]:
-    cv2.imwrite(f'debug_frames/{t:.1f}s.png', extract_single_frame(p, t).image)
-"
+.venv/bin/python .claude/skills/debug-video/inspect_frames.py "<url>" <sec> [<sec> ...]
 ```
 
-Do not copy the snippets in `.claude/skills/debug-video/SKILL.md` - they
-use a `FrameExtractor` class that no longer exists.
-
 Videos cache in `settings.cache_dir` (`~/.cache/runitback/`), so a second
-run on the same video is fast.
-Say so if a download is the slow part.
+run on the same video is fast. Say so if a download is the slow part.
 
 ## Known failure modes - check these before theorizing
 
-Modes 1-4 are from the January 11 investigation (`docs/DEVELOPMENT.md`):
+Each is tracked in `docs/ISSUES.md` (ISSUE-001 to 004, 014); modes 1-4 were
+first described in the January 11 entry of `docs/DEVELOPMENT.md`:
 
 1. **OCR misreads under visual effects.** Steve's mining blocks and particles
    overlap the damage HUD; `13%` has been read as `113%`. Any damage value

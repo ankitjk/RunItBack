@@ -15,7 +15,7 @@ with the `/issues` skill.
 - Planned features (edgeguard detection, Slippi, etc.) are not issues - they live
   under "Future Improvements" in `docs/DEVELOPMENT.md`.
 
-**Next ID:** ISSUE-017
+**Next ID:** ISSUE-021
 
 Severity: **High** = causes wrong results on real videos. **Medium** = blocks
 measuring or improving accuracy. **Low** = tooling, docs, or performance.
@@ -108,6 +108,18 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 - **Suggested fix:** Distinguish "no text in this crop" from "the engine failed":
   re-raise, or abort after N consecutive engine errors.
 
+### ISSUE-017: Inference hardcodes the deployed model's 7 classes
+- **Area:** Scene classifier - **Found:** 2026-11-16, adding test-set evaluation to training
+- **What happens:** `SceneClassifier.CLASS_ORDER` lists the 7 classes the
+  deployed model was trained on, in ImageFolder's alphabetical order. A model
+  retrained on today's labels has 9-10 outputs in a different order, so a
+  prediction at index 7+ raises `IndexError` and lower indices are given the
+  wrong names (index 3 is `both_on_ledge`, not `non_gameplay`). A retrained
+  model cannot be deployed without hand-editing this list.
+- **Where:** `runitback/cv/scene_classifier.py:101` (list), `:253` and `:318` (lookups)
+- **Suggested fix:** Read the order from the `class_mapping.json` that training
+  writes next to the model, falling back to the current list for the old model.
+
 ### ISSUE-006: Too little labeled data to retrain the scene classifier
 - **Area:** Scene classifier - **Found:** 2026-10-23, `label-auditor`
 - **What happens:** The whole corpus is one video (`XUkRx6CpL04`). `respawning`
@@ -117,11 +129,14 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 - **Suggested fix:** Label 3-5 more videos with varied stages and characters,
   favoring games with many stock losses (`tools/scene_labeler.py`).
 
-### ISSUE-007: Two benchmark videos cannot be downloaded
+### ISSUE-007: YouTube's bot check can block benchmark downloads
 - **Area:** Benchmark - **Found:** 2026-10-23 benchmark
-- **What happens:** YouTube's "Sign in to confirm you're not a bot" check blocks
-  yt-dlp for Cloud vs Pit (`KfMZ9bQUbtk`) and Mario vs Ness (`UgGQkF1wkoA`).
-  There is no full 6-video baseline for the current (Gemini off) setup.
+- **What happens:** YouTube's "Sign in to confirm you're not a bot" check
+  sometimes blocks yt-dlp. On October 23 it blocked Cloud vs Pit
+  (`KfMZ9bQUbtk`) and Mario vs Ness (`UgGQkF1wkoA`); both were downloaded for the October
+  24 benchmark, and all 6 sets are now cached in `~/.cache/runitback/`.
+  A new clone or a cleared cache can hit it again, and the run is then partial
+  (see ISSUE-008).
 - **Suggested fix:** Pass yt-dlp `--cookies-from-browser`. Uses your YouTube
   login - a decision for the user.
 
@@ -142,6 +157,17 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 
 ## Low
 
+### ISSUE-020: Exported scene model only accepts a batch of 1
+- **Area:** Scene classifier training - **Found:** 2026-11-24, exporting the held-out game-3 model
+- **What happens:** With torch 2.13, `torch.onnx.export` defaults to the dynamo
+  exporter, which fixes the batch size at 1 despite `dynamic_axes`. onnxruntime
+  fails on a batch of 2 ("Input shape:{2,56,56,384}, requested shape:{3136,384}").
+  RunItBack's inference runs one frame at a time, so the pipeline is unaffected;
+  batched callers break.
+- **Where:** `tools/train_scene_classifier.py:314`
+- **Suggested fix:** Pass `dynamo=False` (verified: batches of 1 and 5 match
+  PyTorch within 2e-6), or use `dynamic_shapes` with the dynamo exporter.
+
 ### ISSUE-011: Parallel OCR is disabled
 - **Area:** Performance - **Found:** 2026-01-06
 - **What happens:** `read_damage_batch_parallel` exists but is not used because
@@ -155,6 +181,8 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 One line per fixed issue, newest first:
 `- ISSUE-NNN: <title> (fixed YYYY-MM-DD, DEVELOPMENT.md <Month D, YYYY>)`
 
+- ISSUE-019: Retraining on current labels collapses onto a 1-frame class; `class_mapping.json` written in the wrong order (fixed 2026-11-16, DEVELOPMENT.md November 16, 2026)
+- ISSUE-018: Random frame-level split leaked near-duplicate frames; test split never evaluated (fixed 2026-11-16, DEVELOPMENT.md November 16, 2026)
 - ISSUE-016: Stock cap keeps the earliest losses, dropping a real final stock (fixed 2026-10-24, DEVELOPMENT.md October 24, 2026)
 - ISSUE-005: Final-stock losses missed without a Gemini key (fixed 2026-10-24, DEVELOPMENT.md October 24, 2026)
 - ISSUE-012: `/analyze` skill has broken commands (fixed 2026-10-23, DEVELOPMENT.md October 23, 2026)

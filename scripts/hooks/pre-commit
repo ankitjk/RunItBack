@@ -31,7 +31,7 @@ staged_list="$(
 # the commit touches the instructions or the code they name (~0.3s). Checks the
 # working tree, so stage everything you have edited before committing.
 if printf '%s\n' "$staged_list" \
-    | grep -qE '^(\.claude/|CLAUDE\.md$|docs/ISSUES\.md$|runitback/|tools/|scripts/)'; then
+    | grep -qE '^(\.claude/|CLAUDE\.md$|docs/(ISSUES|ARCHITECTURE)\.md$|runitback/|tools/|scripts/)'; then
   if [ -x "$repo_root/.venv/bin/python" ]; then
     if ! "$repo_root/.venv/bin/python" "$repo_root/scripts/check_docs.py"; then
       echo ""
