@@ -84,11 +84,13 @@ live path.
 
 Training workflow (`tools/`): `scene_labeler.py` (PyQt5; writes time-segment
 labels to `data/scene_classifier/raw_labels/<video_id>.json`) ->
-`extract_labeled_frames.py` (frames every 0.5s, 0.25s for rare classes; splits
+`extract_labeled_frames.py` (frames every 0.5s, 0.25s for rare classes; a
+video's earlier frames are replaced, so a label edit leaves nothing stale; splits
 **by game**: one whole game is the test set, the last 15% of each other game is
 validation, with a 5s gap) -> `train_scene_classifier.py` (drops classes with
 under 10 training frames, scores the held-out game once, writes
-`test_metrics.json` and `class_mapping.json`, exports ONNX - see ISSUE-020).
+`test_metrics.json` and `class_mapping.json`, and exports ONNX that accepts any
+batch size, checked against PyTorch before the run ends).
 
 ## 5. Game state
 

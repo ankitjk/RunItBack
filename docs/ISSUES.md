@@ -120,22 +120,6 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 - **Suggested fix:** Read the order from the `class_mapping.json` that training
   writes next to the model, falling back to the current list for the old model.
 
-### ISSUE-021: Re-extracting frames after a label edit leaves stale frames
-- **Area:** Scene classifier data - **Found:** 2026-11-25, relabelling the GAME! screen in `XUkRx6CpL04`
-- **What happens:** `extract_labeled_frames.py` writes into the existing frames
-  folder without removing a video's old frames. After a label edit, frames from
-  the old labels stay filed under their old class, and the split is built from
-  everything in the folder, so the model trains and is tested on labels that
-  are no longer in the label file. Nothing warns about it.
-- **Evidence:** After relabelling 11.6s from `non_gameplay` to `respawning`,
-  re-extraction left 22 old `non_gameplay` frames inside the new `respawning`
-  stretches. The folder held 1,675 frames; a clean extraction gives 1,603, so
-  72 were stale.
-- **Where:** `tools/extract_labeled_frames.py:124` (`extract_frames_from_video`)
-- **Suggested fix:** Before extracting a video, delete that video's existing
-  frames from the output folder. Until then, delete
-  `data/scene_classifier/frames/` before re-extracting.
-
 ### ISSUE-006: Too little labeled data to retrain the scene classifier
 - **Area:** Scene classifier - **Found:** 2026-10-23, `label-auditor`
 - **What happens:** The whole corpus is one video (`XUkRx6CpL04`). `respawning`
@@ -174,17 +158,6 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 
 ## Low
 
-### ISSUE-020: Exported scene model only accepts a batch of 1
-- **Area:** Scene classifier training - **Found:** 2026-11-24, exporting the held-out game-3 model
-- **What happens:** With torch 2.13, `torch.onnx.export` defaults to the dynamo
-  exporter, which fixes the batch size at 1 despite `dynamic_axes`. onnxruntime
-  fails on a batch of 2 ("Input shape:{2,56,56,384}, requested shape:{3136,384}").
-  RunItBack's inference runs one frame at a time, so the pipeline is unaffected;
-  batched callers break.
-- **Where:** `tools/train_scene_classifier.py:314`
-- **Suggested fix:** Pass `dynamo=False` (verified: batches of 1 and 5 match
-  PyTorch within 2e-6), or use `dynamic_shapes` with the dynamo exporter.
-
 ### ISSUE-011: Parallel OCR is disabled
 - **Area:** Performance - **Found:** 2026-01-06
 - **What happens:** `read_damage_batch_parallel` exists but is not used because
@@ -198,6 +171,8 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 One line per fixed issue, newest first:
 `- ISSUE-NNN: <title> (fixed YYYY-MM-DD, DEVELOPMENT.md <Month D, YYYY>)`
 
+- ISSUE-021: Re-extracting frames after a label edit leaves stale frames (fixed 2026-11-25, DEVELOPMENT.md November 25, 2026)
+- ISSUE-020: Exported scene model only accepts a batch of 1 (fixed 2026-11-25, DEVELOPMENT.md November 25, 2026)
 - ISSUE-019: Retraining on current labels collapses onto a 1-frame class; `class_mapping.json` written in the wrong order (fixed 2026-11-16, DEVELOPMENT.md November 16, 2026)
 - ISSUE-018: Random frame-level split leaked near-duplicate frames; test split never evaluated (fixed 2026-11-16, DEVELOPMENT.md November 16, 2026)
 - ISSUE-016: Stock cap keeps the earliest losses, dropping a real final stock (fixed 2026-10-24, DEVELOPMENT.md October 24, 2026)
