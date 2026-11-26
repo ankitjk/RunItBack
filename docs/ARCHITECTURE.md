@@ -72,8 +72,9 @@ live path.
   `scripts/fetch_model.sh`): 7 classes, hardcoded in `CLASS_ORDER` (ISSUE-017).
   Trained on a random frame split of one video, so it has no honest accuracy
   figure.
-- **Class definitions:** [SCENE_CLASSES.md](SCENE_CLASSES.md) (11 classes; a
-  12th, `finishing_blow`, is planned).
+- **Class definitions:** [SCENE_CLASSES.md](SCENE_CLASSES.md): 14 classes. The
+  label tool and training support the first 11; `pre_game`, `game_end` and
+  `finishing_blow` (defined 2026-11-26) are not yet supported or labelled.
 - **Measured on unseen games** (game held out, November 16-24, 2026, before the
   GAME! screens were relabelled as `respawning`): 39-51% accuracy across runs; pooled 48.3% over three folds.
   The same code on a random frame split scores 76.4% - the difference is
@@ -83,14 +84,19 @@ live path.
   the main limit (ISSUE-006).
 
 Training workflow (`tools/`): `scene_labeler.py` (PyQt5; writes time-segment
-labels to `data/scene_classifier/raw_labels/<video_id>.json`) ->
-`extract_labeled_frames.py` (frames every 0.5s, 0.25s for rare classes; a
-video's earlier frames are replaced, so a label edit leaves nothing stale; splits
-**by game**: one whole game is the test set, the last 15% of each other game is
-validation, with a 5s gap) -> `train_scene_classifier.py` (drops classes with
-under 10 training frames, scores the held-out game once, writes
-`test_metrics.json` and `class_mapping.json`, and exports ONNX that accepts any
-batch size, checked against PyTorch before the run ends).
+labels to `data/scene_classifier/raw_labels/<video_id>.json`), then
+`build_scene_model.py`, which runs the next two steps into a run folder
+`data/models/runs/<name>/` and records labels, split and results in `run.json`:
+- `extract_labeled_frames.py`: frames every 0.5s, 0.25s for rare classes. A
+  video's earlier frames are replaced, so a label edit leaves nothing stale.
+  Splits **by game**: one held-out game, or every game of one held-out video
+  (`--test-video`), is the test set; the last 15% of each other game is
+  validation, with a 5s gap.
+- `train_scene_classifier.py`: drops classes with under 10 training frames,
+  scores the test set once, writes `test_metrics.json` and `class_mapping.json`,
+  and exports ONNX that accepts any batch size, checked against PyTorch before
+  the run ends.
+- It never writes the deployed model's folder; deploying needs ISSUE-017 fixed.
 
 ## 5. Game state
 

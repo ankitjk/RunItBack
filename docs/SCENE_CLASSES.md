@@ -9,6 +9,11 @@ before then (`XUkRx6CpL04`) may not follow every rule exactly - in particular,
 zoomed finishing blows were labelled as the state before the zoom. Its GAME!
 screens were relabelled from `non_gameplay` to `respawning` on 2026-11-25.
 
+**2026-11-26: three classes added** (`pre_game`, `game_end`, `finishing_blow`;
+14 in all). Not yet supported by the label tool, training or inference, and
+`XUkRx6CpL04` is not yet relabelled: its entrances are still `non_gameplay`,
+its GAME! screens `respawning`, and its finishing blows the state before the zoom.
+
 ## Terms
 
 - **Within the stage**: within the horizontal bounds of the stage and its
@@ -20,7 +25,9 @@ screens were relabelled from `non_gameplay` to `respawning` on 2026-11-25.
 
 ## How a frame is classified
 
-1. If the frame is not gameplay, it is `non_gameplay`. Stop.
+1. If the frame is not gameplay, it is `pre_game`, `game_end` or
+   `non_gameplay`. If it is a finishing-blow zoom, it is `finishing_blow`. Stop.
+   (See "Whole-screen classes".)
 2. Decide each player's state: **respawning, offstage, on_ledge,
    knocked_down, airborne, grounded**.
 3. Take the higher-ranked of the two:
@@ -36,8 +43,8 @@ stage and one above it -> `one_offstage`. Both under the stage ->
 
 **non_gameplay** - Loading screens, character select, stage select, results
 screens, and anything else that isn't actual gameplay between the two players.
-**Pauses are non_gameplay.** The entrance animations and the countdown before
-GO! are non_gameplay; gameplay starts when GO! appears.
+**Pauses are non_gameplay.** The entrances and countdown before GO! are
+`pre_game`, and the GAME!/TIME! screen is `game_end` (see below).
 
 **both_grounded** - Both players are grounded, within the stage.
 
@@ -72,22 +79,33 @@ shows a slight yellow flash). The other player is within the stage.
   against the screen
 - a player on the angel (respawn) platform
 - the stock count shown in the centre of the screen as a player respawns
-- **the GAME! screen**, from the first frame GAME! appears until the wipe to the
-  results screen begins; `non_gameplay` starts at the wipe's first frame
-- **the TIME! screen** shown when the clock runs out, by the same rule as GAME!
-  (added 2026-11-26; no labelled video has one yet)
 
 Cue: until the respawn platform appears, one or both players have **no damage
 percentage** shown on their HUD. If either player is respawning, the frame is
 `respawning`.
 
-## Zoomed-in finishing blows - planned 12th class
+The KO flash can happen on any stock; it shows that a player **was** knocked
+out. Compare `finishing_blow`, which shows that a final-stock KO is **likely**.
 
-The zoom does not always end in a kill, so it is **not** `respawning`, and
-"the state before the zoom" can't be learned by a model that sees one frame at
-a time. Planned: a separate class, `finishing_blow`, for the zoomed, slowed-down
-shot. Label what the frame shows; whether it killed is decided later, from the
-frames after it (a respawn follows, or not).
+## Whole-screen classes (added 2026-11-26)
 
-Not yet supported: RunItBack's label tool, training script and inference know
-only the 11 classes above.
+These describe the whole screen, not the players. They are checked first and
+override every player state.
+
+**pre_game** - From the first frame the stage is shown after the loading
+screen (the characters' entrances) through the countdown, until GO! appears.
+The first frame showing GO! is gameplay: the players can act from that frame.
+
+**game_end** - The **GAME!** screen, or the **TIME!** screen when the clock
+runs out, from the first frame it appears until the white flash that wipes to
+the results screen; `non_gameplay` starts at the flash's first frame. (The
+GAME! screen was `respawning` from 2026-11-25 to 2026-11-26.)
+
+**finishing_blow** - The **red flash** the game shows when it calculates that
+a hit is likely to knock out a player on their **final stock**. From the first
+frame the red flash starts until it is completely gone; the zoom and freeze
+frame fall around the middle of it. It usually, but not always, ends in a KO;
+label what the frame shows, not the outcome. It is not `respawning`: that flash means a KO happened, on any stock.
+
+Order of checks for a frame: `non_gameplay` / `pre_game` / `game_end` ->
+`finishing_blow` -> the player states, ranked as above.

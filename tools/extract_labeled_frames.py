@@ -314,33 +314,54 @@ def resolve_test_game(groups: list[str], test_game: str | None) -> str:
     return key
 
 
+def resolve_test_video(groups: list[str], test_video: str) -> list[str]:
+    """Every game of one video, for holding out a whole video as the test set."""
+    test_keys = [g for g in groups if g.rsplit(":", 1)[0] == test_video]
+    if not test_keys:
+        videos = sorted({g.rsplit(":", 1)[0] for g in groups})
+        raise ValueError(f"No frames for video {test_video}. Videos: {', '.join(videos)}")
+    if len(test_keys) == len(groups):
+        raise ValueError(
+            f"{test_video} is the only labeled video; holding it out leaves nothing to train on. "
+            "Hold out a game instead (--test-game)."
+        )
+    return test_keys
+
+
 def assign_game_splits(
     frames: list[FrameInfo],
     test_game: str | None = None,
     val_ratio: float = 0.15,
     val_gap_secs: float = DEFAULT_VAL_GAP_SECS,
+    test_video: str | None = None,
 ) -> tuple[dict[str, list[FrameInfo]], dict]:
     """Split frames by game, so near-duplicate neighbouring frames never cross splits.
 
-    - test: every frame of one held-out game. Evaluated once, after training.
+    - test: every frame of one held-out game, or of every game of one held-out
+      video (`test_video`). Evaluated once, after training.
     - val: the last `val_ratio` of each remaining game's labeled time span. Used
-      to choose the checkpoint, so it must not be the test game.
+      to choose the checkpoint, so it must not be a test game.
     - train: the rest, minus frames within `val_gap_secs` before a val block.
 
     Returns:
         (frames by split, a manifest describing the split for split_manifest.json)
     """
+    if test_game is not None and test_video is not None:
+        raise ValueError("Hold out a game or a video, not both.")
     groups = sorted({f.group for f in frames}, key=lambda g: (g.rsplit(":", 1)[0], int(g.rsplit(":", 1)[1])))
     if len(groups) < 2:
         raise ValueError(f"A game split needs at least 2 labeled games; found {len(groups)}.")
-    test_key = resolve_test_game(groups, test_game)
+    if test_video is not None:
+        test_keys = resolve_test_video(groups, test_video)
+    else:
+        test_keys = [resolve_test_game(groups, test_game)]
 
     splits: dict[str, list[FrameInfo]] = {s: [] for s in SPLITS}
     dropped = 0
     val_blocks = {}
     for group in groups:
         group_frames = [f for f in frames if f.group == group]
-        if group == test_key:
+        if group in test_keys:
             splits["test"].extend(group_frames)
             continue
         start = min(f.time_sec for f in group_frames)
@@ -357,8 +378,9 @@ def assign_game_splits(
 
     manifest = {
         "split_by": "game",
-        "test_game": test_key,
-        "train_games": [g for g in groups if g != test_key],
+        "held_out": "video" if test_video is not None else "game",
+        "test_games": test_keys,
+        "train_games": [g for g in groups if g not in test_keys],
         "val_blocks_sec": val_blocks,
         "val_ratio": val_ratio,
         "val_gap_secs": val_gap_secs,
@@ -402,6 +424,7 @@ def create_train_val_test_splits(
     val_ratio: float = 0.15,
     val_gap_secs: float = DEFAULT_VAL_GAP_SECS,
     seed: int = 42,
+    test_video: str | None = None,
 ) -> dict:
     """Copy extracted frames into splits_dir/{train,val,test}/<class>/.
 
@@ -412,7 +435,7 @@ def create_train_val_test_splits(
     """
     frames = collect_frames(frames_dir)
     if split_by == "game":
-        splits, manifest = assign_game_splits(frames, test_game, val_ratio, val_gap_secs)
+        splits, manifest = assign_game_splits(frames, test_game, val_ratio, val_gap_secs, test_video)
     elif split_by == "frame":
         splits, manifest = assign_frame_splits(frames, train_ratio, val_ratio, seed)
     else:
@@ -444,7 +467,7 @@ def print_split_statistics(split_stats: dict, splits_dir: Path) -> None:
     print("\n" + "-" * 60)
     print(f"Split by {manifest['split_by']}")
     if manifest["split_by"] == "game":
-        print(f"  test (held out): {manifest['test_game']}")
+        print(f"  test (held-out {manifest['held_out']}): {', '.join(manifest['test_games'])}")
         print(f"  train/val:       {', '.join(manifest['train_games'])}")
         print(f"  dropped {manifest['dropped_gap_frames']} frames in the {manifest['val_gap_secs']}s gap before val")
     else:
@@ -457,6 +480,35 @@ def print_split_statistics(split_stats: dict, splits_dir: Path) -> None:
     totals = [sum(split_stats[s].values()) for s in SPLITS]
     print(f"  {'total':<20} {totals[0]:>6} {totals[1]:>6} {totals[2]:>6}")
     print(f"\nManifest: {splits_dir / 'split_manifest.json'}")
+
+
+def extract_all(label_files: list[Path], output_dir: Path) -> ExtractionStats:
+    """Extract frames for every label file into output_dir/<class>/.
+
+    Each video's earlier frames are replaced (see remove_video_frames). A label
+    file that cannot be read, or whose video is missing, is recorded in
+    stats.errors and skipped.
+    """
+    print(f"Found {len(label_files)} label file(s)")
+    print(f"Output directory: {output_dir}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    stats = ExtractionStats()
+    for label_path in label_files:
+        print(f"\nProcessing: {label_path.name}")
+        try:
+            labels = load_labels(label_path)
+        except Exception as e:
+            stats.errors.append(f"Could not load {label_path}: {e}")
+            continue
+
+        video_path = find_video_for_labels(label_path, labels)
+        if not video_path:
+            stats.errors.append(f"Could not find video for {label_path.name}")
+            continue
+
+        extract_frames_from_video(video_path, labels, output_dir, stats)
+    return stats
 
 
 def print_statistics(stats: ExtractionStats):
@@ -535,10 +587,15 @@ def main():
         help="game: hold out a whole game as the test set (default). "
         "frame: the old random frame split, which leaks near-duplicate frames - for comparison only",
     )
-    parser.add_argument(
+    held_out = parser.add_mutually_exclusive_group()
+    held_out.add_argument(
         "--test-game",
         help="Game to hold out as the test set: '3', or 'VIDEO_ID:3' when several videos "
         "are labeled. Default: the last game",
+    )
+    held_out.add_argument(
+        "--test-video",
+        help="Hold out every game of this video as the test set (needs another labeled video)",
     )
     parser.add_argument(
         "--train-ratio",
@@ -576,6 +633,7 @@ def main():
             train_ratio=args.train_ratio,
             val_ratio=args.val_ratio,
             val_gap_secs=args.val_gap,
+            test_video=args.test_video,
         )
         print_split_statistics(split_stats, args.splits_dir)
         return
@@ -590,32 +648,7 @@ def main():
         print("No label files found!")
         return
 
-    print(f"Found {len(label_files)} label file(s)")
-    print(f"Output directory: {args.output_dir}")
-
-    # Create output directory
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Process each label file
-    stats = ExtractionStats()
-
-    for label_path in label_files:
-        print(f"\nProcessing: {label_path.name}")
-
-        try:
-            labels = load_labels(label_path)
-        except Exception as e:
-            stats.errors.append(f"Could not load {label_path}: {e}")
-            continue
-
-        # Find corresponding video
-        video_path = find_video_for_labels(label_path, labels)
-        if not video_path:
-            stats.errors.append(f"Could not find video for {label_path.name}")
-            continue
-
-        # Extract frames
-        extract_frames_from_video(video_path, labels, args.output_dir, stats)
+    stats = extract_all(label_files, args.output_dir)
 
     # Create train/val/test splits
     split_stats = None
@@ -629,6 +662,7 @@ def main():
             train_ratio=args.train_ratio,
             val_ratio=args.val_ratio,
             val_gap_secs=args.val_gap,
+            test_video=args.test_video,
         )
 
     # Print statistics

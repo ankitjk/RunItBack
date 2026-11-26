@@ -8,6 +8,56 @@ The changelog of RunItBack: what changed in each session, why, and what was meas
 
 ## Changelog
 
+### November 26, 2026 - One-Command Model Build; 11-Class Baseline on Corrected Labels
+
+**Session Goal:** Labelling-loop step 1: one command that extracts, splits, trains, tests and exports. Then the first measurement on the labels as corrected on 2026-11-25.
+
+**Changes:**
+- `tools/build_scene_model.py` (new) - extract -> split -> train -> test -> export into its own run folder, `data/models/runs/<name>/`. The folder holds the ONNX model, `class_mapping.json`, `test_metrics.json`, the split manifest, the training history, and `run.json` (git commit, SHA-256 of each label file, split, options, results).
+  - Refuses an existing run name, so a result is never overwritten.
+  - Refuses to train if extraction had errors (e.g. a missing video): training on part of the data while the totals look normal is the ISSUE-008 failure.
+  - Drops the ~110 MB checkpoints unless `--keep-checkpoints`.
+- `tools/extract_labeled_frames.py` - `--test-video` holds out every game of one video, which needs a second labelled video. The manifest's `test_game` became `test_games` (a list) plus `held_out` (`game` or `video`). Extraction moved into `extract_all()` for the build command.
+- `tools/train_scene_classifier.py` - training moved from `main()` into `train_model()`, which returns a summary.
+  - **Default output changed from `data/models` to `data/models/runs/manual`.** The old default was the deployed model's folder, so a plain training run would have overwritten `data/models/scene_classifier.onnx` with a model whose classes inference can't decode (ISSUE-017). `train_model()` now refuses that folder.
+- `tests/test_scene_splits.py` - 5 new tests: video hold-out; the only video can't be held out; game and video together are rejected; the build's run folder and `run.json` (training stubbed); training refuses the deployed folder.
+- `README.md`, `docs/ARCHITECTURE.md`, `CLAUDE.md` - the build command.
+
+**Results** (`--test-game 3`, run `2026-11-26_baseline-11class-g3`, Gemini not involved):
+- Clean extraction: 1,603 frames, split 933 train / 148 val / 499 test, with 23 dropped in the validation gap.
+  - The November 25 split (934 / 190 / 528) still included the 72 stale frames that ISSUE-021 described.
+- 8 classes trained:
+  - `both_on_ledge` was left out with 1 frame.
+  - `one_knocked_down` has no training frames, and `both_knocked_down` has none at all.
+- Best checkpoint at epoch 8, from 13 epochs (early stop). 17.8 minutes on MPS.
+- **Test accuracy 45.6%**, macro recall 48.7% (496 frames).
+  - That is inside the 39-51% range of the November 16-24 runs on the old labels. One run can't show whether the relabel helped.
+- `respawning`: recall 82.1% (32/39), precision 47.1% (32/68).
+- `one_on_ledge` is heavily over-predicted: 85 predicted, 10 correct (11.8% precision). Most of the false ones were `one_airborne` (22) and `one_offstage` (17). It is the same rare-class over-prediction as before.
+- ONNX check: a batch of 3 matches PyTorch within 2.1e-6. Deployed model unchanged.
+- Fast suite: 84 passed, 6 xfailed.
+
+---
+
+### November 26, 2026 - Three New Scene Classes Defined; Plan Reordered
+
+**Changes:**
+- `docs/SCENE_CLASSES.md` - three whole-screen classes, in the owner's definitions (14 classes in all):
+  - **`pre_game`:** the entrances and countdown, until GO! appears.
+  - **`game_end`:** the GAME! or TIME! screen, until the white flash to results. The GAME! screen was `respawning` for one day.
+  - **`finishing_blow`:** the red-flash zoom the game shows when a hit is likely to KO a player on their final stock.
+  - They are checked before the player states. The KO flash stays `respawning`: it means a KO happened, on any stock.
+  - **Why:** `non_gameplay` mixed menus with characters on stage, and `respawning` mixed respawns with the end of the game. A learned GO!/GAME! signal could also back up the colour-based game-boundary checks (ISSUE-022).
+- `docs/ARCHITECTURE.md` - the class count, and that the three new classes are not yet supported or labelled.
+- Future Improvements - plan reordered, so the class list is settled before video 2 is labelled:
+  - Every class change means relabelling every labelled video, so all three classes go in together.
+  - Label editing (step 2) and the new classes with ISSUE-017 and relabelling `XUkRx6CpL04` (step 3) now come before game bounds, the skeleton and the review screen.
+- PyQt5 installed in `.venv` (`uv pip install`); the label tool opens `XUkRx6CpL04` with all 3 games.
+
+**Results:** Definitions and plan only. No labels, code or models changed.
+
+---
+
 ### November 26, 2026 - Label Tool Help Text; Game-Boundary Detection Checked on an Unseen Video
 
 **Session Goal:** Correct `scene_labeler.py`'s out-of-date instructions, and find out whether GO!/GAME! detection can supply game bounds for unlabelled videos (the planned skeleton label file).
@@ -876,10 +926,10 @@ Example for "doug todd (Mario) vs Spencer (Ness)":
 4. **Slippi Integration** - For Melee replays, read game memory directly
 5. **Stage-specific Ledge Detection** - Use stage geometry data for ledgetrap identification
 6. **Strict type checking** - Turn on mypy `strict = true`. 28 errors remain (October 23, 2026), mostly missing generic parameters (`dict` instead of `dict[str, int]`) and unannotated functions. The real type bugs were already fixed in relaxed mode.
-7. **`finishing_blow` scene class** - a 12th class for zoomed-in finishing blows (see `docs/SCENE_CLASSES.md`); needs the labeller, training class list and inference updated.
+7. **New scene classes** - `pre_game`, `game_end` and `finishing_blow` were defined on 2026-11-26 (see `docs/SCENE_CLASSES.md`). They are planned in the labelling loop, step 3.
 8. **Labelling loop with `runitback-labeler`** - see below.
 
-### Labelling loop (planned order, 2026-11-26)
+### Labelling loop (planned order, revised 2026-11-26)
 
 Goal: label new videos by approving machine drafts instead of labelling from
 scratch. `runitback-labeler` (a separate repo) writes draft labels. A person
@@ -891,22 +941,54 @@ depend on game bounds (`extract_labeled_frames.py` uses the game only to tag
 frames for the split). A boundary that cuts through gameplay, however, leaks one
 real game into two splits, so bounds are confirmed like any other label.
 
-1. **Train-and-export command, then retrain.** One command that trains,
-   evaluates on held-out data, and exports ONNX, with a hold-out choice of a
-   game (now) or a whole video (once there are two). Retrain on the corrected
-   labels to get a baseline, and give the labeller a current model; its copy
-   predates the GAME! relabel.
-2. **Game bounds.**
+**The class list is settled before video 2 is labelled.** Each change to it
+means relabelling every labelled video, so all three new classes go in at once
+(step 3), before the labeller drafts video 2.
+
+1. **Train-and-export command.** One command that trains, evaluates on held-out
+   data, and exports ONNX, with a hold-out choice of a game (now) or a whole
+   video (once there are two). Its first run is the baseline on the corrected
+   11-class labels.
+2. **Label editing in `scene_labeler.py`.**
+   - Select a segment and change its class.
+   - Split a segment at the playhead, move a segment's edges, delete a segment;
+     segments never overlap.
+   - Store exact times instead of rounding to 0.1s.
+   - Keep fields the tool doesn't know (`source`, `needs_review`,
+     `model_label`, `llm_label`, `llm_reason`, `confidence`, and the format-1
+     game fields).
+3. **The three new classes, end to end.**
+   - Keys in the label tool (0-9 and R are taken; proposed P = `pre_game`,
+     X = `game_end`, F = `finishing_blow`).
+   - Training class list.
+   - ISSUE-017: inference reads the class order from `class_mapping.json`.
+   - Code that uses class names: the `SceneState` enum and its gameplay test
+     in `runitback/cv/scene_classifier.py` (`pre_game` and `game_end` are not
+     gameplay), and the `respawning` rules and disadvantage tags in
+     `runitback/classification/detector.py` (the GAME! screen is no longer
+     part of a `respawning` run).
+   - **Relabel `XUkRx6CpL04`** with the step-2 editing. Claude proposes
+     frame-exact times; the owner approves before anything is written:
+     - `game_end`: the 3 GAME! segments, a class change only.
+     - `pre_game`: each game's entrance start (its end is the GO! already marked).
+     - `finishing_blow`: each red-flash zoom, split out of the segment it sits in.
+   - Retrain with step 1's command, and give the labeller the model.
+   - `finishing_blow` shows at most a few times per set (final stock only), so
+     it may stay under the 10-frame training minimum until more videos are
+     labelled. Say so in the results rather than inflating it.
+4. **Game bounds.**
    - Split the GO!/GAME! part of `detect_games` into a shared function without
      character detection.
    - Fix ISSUE-022 (character select detected as GO!) and ISSUE-023 (a missed
      marker drops or merges a game).
    - Tighten `test_timestamp_accuracy` from 30s to about 2s.
-   - Measure on more broadcasts: the owner picks about 10 videos from different
-     channels and marks only their GO!/GAME! times (minutes per video).
+   - Measure on more broadcasts: about 10 videos from different channels.
+     Claude proposes each GO!/GAME! time with a thumbnail; the owner confirms.
    - Without that measurement, accuracy on new broadcasts is unknown: the one
      unseen video checked so far exposed ISSUE-022.
-3. **Skeleton tool** - `tools/make_label_skeleton.py` writes
+   - Once trained, `pre_game` and `game_end` are a second, learned signal for
+     game bounds alongside the colour checks.
+5. **Skeleton tool** - `tools/make_label_skeleton.py` writes
    `data/scene_classifier/skeletons/<video_id>.json` (gitignored). It is the
    label-file format with empty `labels`, plus these fields:
    - Top level: `format` (1), `duration_sec`, `detection` (method, counts,
@@ -922,36 +1004,28 @@ real game into two splits, so bounds are confirmed like any other label.
      saying so, never dropped.
    - A file or game with no `status` is a finished legacy label (`labelled`,
      bounds confirmed).
-4. **Label-tool upgrade (the review screen).**
-   - Keep fields the tool doesn't know (`source`, `needs_review`,
-     `model_label`, `llm_label`, `llm_reason`, `confidence`).
-   - Store exact times instead of rounding to 0.1s.
-   - Edit and delete segments; no overlaps.
+6. **Review screen and extraction check.**
    - Import a draft for one game into the video's label file.
    - **Bounds confirmation:** per game, four thumbnails (start, GO!, GAME!,
      end), with adjusting by key. The person also confirms whether the game
-     ends with a GAME! screen; it may not, if the clock ran out (TIME!), or the
-     recording or stream cut off. Sets `bounds_confirmed` and
-     `ends_with_game_screen`.
+     ends with a GAME! or TIME! screen; it may not, if the recording or stream
+     cut off. Sets `bounds_confirmed` and `ends_with_game_screen`.
    - **Review mode:** N jumps to the next `needs_review` segment, Enter accepts
-     the proposed class, 0-9 / R change it. A side panel shows the model's and
-     the LLM's label and the LLM's reason. Accepting or changing sets
-     `source=human` and clears `needs_review`.
+     the proposed class, the class keys change it. A side panel shows the
+     model's and the LLM's label and the LLM's reason. Accepting or changing
+     sets `source=human` and clears `needs_review`.
    - A game is saved as `labelled` only when its bounds are confirmed and no
      segment needs review.
-5. **Extraction check** in `extract_labeled_frames.py`:
-   - Games that are not `labelled` are skipped and listed in the output, so a
-     finished game can be used while others are still drafts.
-   - A `labelled` game is refused (non-zero exit, naming file and game) if any
-     segment still needs review, if its boundary falls outside a `non_gameplay`
-     segment, or if `ends_with_game_screen` is true and its last gameplay
-     segment is not `respawning` (the GAME! screen). The rule keys on the
-     person's confirmation, not on `end_source`, which is only what detection
-     found. Tolerance is 0.05s.
-   - The existing `XUkRx6CpL04` labels pass these rules (checked 2026-11-26).
-6. **Labeller drafts video 2** against the skeleton (`runitback-labeler`).
-7. **Review video 2**, then train on video 1 and test on all of video 2: the
+   - **Extraction** (`extract_labeled_frames.py`): games that are not
+     `labelled` are skipped and listed in the output, so a finished game can be
+     used while others are still drafts. A `labelled` game is refused
+     (non-zero exit, naming file and game) if any segment still needs review,
+     if its boundary falls outside a `non_gameplay` segment, or if
+     `ends_with_game_screen` is true and it has no `game_end` segment before
+     its boundary. The rule keys on the person's confirmation, not on
+     `end_source`, which is only what detection found. Tolerance is 0.05s.
+7. **Labeller drafts video 2** against the skeleton, with all 14 classes
+   (`runitback-labeler`).
+8. **Review video 2**, then train on video 1 and test on all of video 2: the
    first cross-video accuracy figure. Video 2 stays the held-out test set.
-8. **`finishing_blow` class and ISSUE-017** (read the class order from
-   `class_mapping.json` so a retrained model can be deployed).
 9. **Generalise** the label tool and training beyond this class set and project.

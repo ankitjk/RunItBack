@@ -61,7 +61,7 @@ def test_game_split_keeps_each_game_whole(three_games):
     assert {f.group for f in splits["test"]} == {"XUkRx6CpL04:2"}
     train_val_groups = {f.group for f in splits["train"] + splits["val"]}
     assert train_val_groups == {"XUkRx6CpL04:1", "XUkRx6CpL04:3"}
-    assert manifest["test_game"] == "XUkRx6CpL04:2"
+    assert manifest["test_games"] == ["XUkRx6CpL04:2"]
     # The held-out game is complete, not a sample of it.
     assert len(splits["test"]) == 200
 
@@ -78,7 +78,7 @@ def test_validation_is_separated_from_training_by_the_gap(three_games):
 
 def test_default_test_game_is_the_last_one(three_games):
     _, manifest = elf.assign_game_splits(elf.collect_frames(three_games))
-    assert manifest["test_game"] == "XUkRx6CpL04:3"
+    assert manifest["test_games"] == ["XUkRx6CpL04:3"]
 
 
 def test_unknown_test_game_is_rejected(three_games):
@@ -95,6 +95,29 @@ def test_bare_game_number_is_ambiguous_with_several_videos(three_games):
     assert {f.video_id for f in splits["test"]} == {"otherVideo1"}
 
 
+def test_test_video_holds_out_every_game_of_that_video(three_games):
+    _make_frames(three_games, "otherVideo1", 1, 0, 30, "both_grounded")
+    _make_frames(three_games, "otherVideo1", 2, 100, 130, "one_airborne")
+    splits, manifest = elf.assign_game_splits(elf.collect_frames(three_games), test_video="otherVideo1")
+
+    assert {f.group for f in splits["test"]} == {"otherVideo1:1", "otherVideo1:2"}
+    assert {f.video_id for f in splits["train"] + splits["val"]} == {"XUkRx6CpL04"}
+    assert manifest["held_out"] == "video"
+    assert manifest["test_games"] == ["otherVideo1:1", "otherVideo1:2"]
+
+
+def test_holding_out_the_only_video_is_rejected(three_games):
+    with pytest.raises(ValueError, match="only labeled video"):
+        elf.assign_game_splits(elf.collect_frames(three_games), test_video="XUkRx6CpL04")
+    with pytest.raises(ValueError, match="No frames for video"):
+        elf.assign_game_splits(elf.collect_frames(three_games), test_video="missing")
+
+
+def test_game_and_video_cannot_both_be_held_out(three_games):
+    with pytest.raises(ValueError, match="not both"):
+        elf.assign_game_splits(elf.collect_frames(three_games), test_game="1", test_video="XUkRx6CpL04")
+
+
 def test_one_game_cannot_be_game_split(tmp_path):
     _make_frames(tmp_path, "XUkRx6CpL04", 1, 0, 30, "both_grounded")
     with pytest.raises(ValueError, match="at least 2"):
@@ -107,7 +130,7 @@ def test_create_splits_writes_folders_and_manifest(three_games, tmp_path):
 
     manifest = json.loads((splits_dir / "split_manifest.json").read_text())
     assert manifest["split_by"] == "game"
-    assert manifest["test_game"] == "XUkRx6CpL04:1"
+    assert manifest["test_games"] == ["XUkRx6CpL04:1"]
     for split in elf.SPLITS:
         on_disk = len(list((splits_dir / split).rglob("*.jpg")))
         assert on_disk == sum(stats[split].values()) == sum(manifest["frames"][split].values())
@@ -232,3 +255,65 @@ def test_onnx_export_accepts_any_batch_size(tmp_path):
     tsc.export_onnx(model.to(device), path, input_size=32)  # raises if a batch of 3 fails
 
     assert path.exists() and not (tmp_path / "model.onnx.data").exists()
+
+
+def _build_args(tmp_path: Path, frames_dir: Path, **overrides):
+    import argparse
+
+    args = argparse.Namespace(
+        test_game=None, test_video=None, name="run1", runs_dir=tmp_path / "runs",
+        labels_dir=tmp_path / "labels", frames_dir=frames_dir, splits_dir=tmp_path / "splits",
+        reuse_frames=True, val_ratio=0.15, val_gap=5.0, keep_checkpoints=False,
+        epochs=1, batch_size=2, lr=1e-4, weight_decay=0.05, label_smoothing=0.1, early_stopping=5,
+        no_pretrained=True, workers=0, min_class_frames=10,
+    )
+    for key, value in overrides.items():
+        setattr(args, key, value)
+    labels_dir = args.labels_dir
+    labels_dir.mkdir(exist_ok=True)
+    (labels_dir / "XUkRx6CpL04.json").write_text(json.dumps(_labels("XUkRx6CpL04", [(0, 1, "both_grounded")])))
+    return args
+
+
+def test_build_writes_a_run_folder_and_never_the_deployed_model(three_games, tmp_path, monkeypatch):
+    """build_scene_model: one run folder per build, recording the split and labels.
+
+    Training itself is replaced by a stub; this checks the wiring around it.
+    """
+    pytest.importorskip("torch")
+    pytest.importorskip("torchvision")
+    bsm = _load_tool("build_scene_model")
+    seen = {}
+
+    def fake_train(data_dir, output_dir, **kwargs):
+        seen["data_dir"], seen["kwargs"] = data_dir, kwargs
+        (output_dir / "scene_classifier.onnx").write_bytes(b"onnx")
+        return {"class_names": ["both_grounded", "one_airborne"], "best_val_acc": 0.5, "best_epoch": 1,
+                "epochs_run": 1, "left_out_too_few_frames": {}, "device": "cpu", "minutes": 0.0,
+                "test_metrics": {"accuracy": 0.25, "macro_recall": 0.5, "frames": 200}}
+
+    monkeypatch.setattr(bsm.tsc, "train_model", fake_train)
+    args = _build_args(tmp_path, three_games, test_game="2")
+    run_dir = bsm.build(args)
+
+    assert run_dir == tmp_path / "runs" / "run1"
+    run = json.loads((run_dir / "run.json").read_text())
+    assert run["split"]["test_games"] == ["XUkRx6CpL04:2"]
+    assert run["test"] == {"accuracy": 0.25, "macro_recall": 0.5, "frames": 200}
+    assert run["labels"][0]["video_id"] == "XUkRx6CpL04" and len(run["labels"][0]["sha256"]) == 64
+    assert run["deployed"] is False
+    assert seen["data_dir"] == args.splits_dir and seen["kwargs"]["epochs"] == 1
+    assert (run_dir / "split_manifest.json").exists()
+
+    # A second build with the same name is refused rather than overwriting the first.
+    with pytest.raises(FileExistsError):
+        bsm.build(args)
+
+
+def test_training_refuses_to_write_over_the_deployed_model(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    pytest.importorskip("torchvision")
+    tsc = _load_tool("train_scene_classifier")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match="deployed model"):
+        tsc.train_model(tmp_path / "splits", Path("data/models"))
