@@ -77,6 +77,7 @@ class ExtractionStats:
     frames_per_class: dict = None
     videos_processed: int = 0
     errors: list = None
+    stale_frames_removed: int = 0
 
     def __post_init__(self):
         if self.frames_per_class is None:
@@ -121,13 +122,37 @@ def find_video_for_labels(label_path: Path, labels: dict) -> Path | None:
     return None
 
 
+def remove_video_frames(output_dir: Path, video_id: str) -> int:
+    """Delete every frame previously extracted from one video. Returns the count.
+
+    Frames are named by their label, so after a label edit the old frames would
+    otherwise stay filed under their old class - and the splits are built from
+    everything in the folder. Other videos' frames are left alone.
+    """
+    removed = 0
+    if not output_dir.exists():
+        return 0
+    for class_dir in output_dir.iterdir():
+        if not class_dir.is_dir():
+            continue
+        for path in class_dir.glob("*.jpg"):
+            try:
+                info = parse_frame_name(path, class_dir.name)
+            except ValueError:
+                continue  # not a frame this script wrote
+            if info.video_id == video_id:
+                path.unlink()
+                removed += 1
+    return removed
+
+
 def extract_frames_from_video(
     video_path: Path,
     labels: dict,
     output_dir: Path,
     stats: ExtractionStats,
 ) -> None:
-    """Extract frames from a video based on labels."""
+    """Extract frames from a video based on labels, replacing its earlier frames."""
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         stats.errors.append(f"Could not open video: {video_path}")
@@ -139,6 +164,12 @@ def extract_frames_from_video(
 
     video_id = labels.get("video_id", video_path.stem)
     print(f"  Video: {video_path.name} ({duration:.1f}s, {fps:.1f} FPS)")
+
+    # Only once the video is known to open, so a bad path never wipes good frames.
+    removed = remove_video_frames(output_dir, video_id)
+    stats.stale_frames_removed += removed
+    if removed:
+        print(f"  Removed {removed} frames from an earlier extraction")
 
     frames_extracted = 0
 
@@ -436,6 +467,8 @@ def print_statistics(stats: ExtractionStats):
 
     print(f"\nVideos processed: {stats.videos_processed}")
     print(f"Total frames extracted: {stats.total_frames}")
+    if stats.stale_frames_removed:
+        print(f"Frames from earlier extractions replaced: {stats.stale_frames_removed}")
 
     print("\nFrames per class:")
     print("-" * 40)

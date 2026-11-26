@@ -17,6 +17,7 @@ Examples:
 """
 
 import argparse
+import copy
 import json
 import time
 from pathlib import Path
@@ -306,25 +307,64 @@ def save_checkpoint(
 def export_onnx(
     model: nn.Module,
     output_path: Path,
-    device: torch.device,
+    input_size: int = 224,
 ) -> None:
-    """Export model to ONNX format."""
-    model.eval()
-    dummy_input = torch.randn(1, 3, 224, 224).to(device)
+    """Export the model to ONNX, accepting any batch size, and check the result.
+
+    With an example batch of 1, the default exporter in recent PyTorch (seen
+    with 2.13) fixes the batch size at 1 even when `dynamic_axes` marks it as
+    variable: the file loads but fails on any larger batch (ISSUE-020). So the
+    example batch is 2 and the dimension is declared with `dynamic_shapes`.
+    The older TorchScript exporter (`dynamo=False`) also works, but is deprecated.
+
+    The export runs on a CPU copy of the model: exported from Apple's MPS
+    device, the batch size came out fixed at 2 instead (PyTorch 2.13).
+    """
+    model = copy.deepcopy(model).cpu().eval()
+    example = torch.randn(2, 3, input_size, input_size)
+
+    # An earlier export may have left its weights in a separate file next to the
+    # model. This export writes a single file, so remove the stale one.
+    stale_weights = output_path.with_name(output_path.name + ".data")
+    if stale_weights.exists():
+        stale_weights.unlink()
 
     torch.onnx.export(
         model,
-        dummy_input,
+        (example,),
         str(output_path),
         input_names=["input"],
         output_names=["output"],
-        dynamic_axes={
-            "input": {0: "batch_size"},
-            "output": {0: "batch_size"},
-        },
-        opset_version=17,
+        dynamic_shapes=({0: torch.export.Dim("batch_size", min=1)},),
+        external_data=False,
+        dynamo=True,
     )
+    check_onnx_export(model, output_path, input_size)
     print(f"Exported ONNX model to: {output_path}")
+
+
+def check_onnx_export(
+    model: nn.Module,
+    onnx_path: Path,
+    input_size: int = 224,
+    batch_size: int = 3,
+    tolerance: float = 1e-3,
+) -> None:
+    """Run a batch through the ONNX file and PyTorch; raise if they disagree."""
+    import numpy as np
+    import onnxruntime as ort
+
+    batch = torch.randn(batch_size, 3, input_size, input_size)
+    session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    onnx_out = session.run(None, {session.get_inputs()[0].name: batch.numpy()})[0]
+    with torch.no_grad():
+        torch_out = model(batch).numpy()
+    if onnx_out.shape != torch_out.shape:
+        raise RuntimeError(f"ONNX export: output shape {onnx_out.shape}, expected {torch_out.shape}")
+    diff = float(np.abs(onnx_out - torch_out).max())
+    if diff > tolerance:
+        raise RuntimeError(f"ONNX export: outputs differ from PyTorch by {diff:.2e} (limit {tolerance:.0e})")
+    print(f"  ONNX check: batch of {batch_size} matches PyTorch (max difference {diff:.1e})")
 
 
 def main():
@@ -531,7 +571,7 @@ def main():
         print(f"Saved test metrics to: {metrics_path}")
 
     # Export to ONNX
-    export_onnx(model, args.output_dir / "scene_classifier.onnx", device)
+    export_onnx(model, args.output_dir / "scene_classifier.onnx")
 
     # Save training history
     history_path = args.output_dir / "training_history.json"

@@ -8,6 +8,32 @@ The changelog of RunItBack: what changed in each session, why, and what was meas
 
 ## Changelog
 
+### November 25, 2026 - Stale Frames and Batch-1 ONNX Export Fixed (ISSUE-020, ISSUE-021)
+
+**Session Goal:** Fix the two open bugs in the labelling loop's path (labels -> frames -> training -> model) before building on it.
+
+**Changes:**
+- `tools/extract_labeled_frames.py` - `remove_video_frames()` deletes a video's previously extracted frames before extracting it again. Fixes ISSUE-021.
+  - Frames are named by their label, so after a label edit the old frames stayed filed under their old class, and the splits are built from everything in the folder. The GAME! relabel earlier today left 72 stale frames this way.
+  - Matching uses the parsed video ID, not a filename prefix, so a video whose ID begins with another's is not touched. Other videos' frames are kept.
+  - It runs only after the video opens, so a wrong path cannot delete good frames.
+  - The run prints how many frames were replaced.
+- `tools/train_scene_classifier.py` - `export_onnx()` now produces a model that accepts any batch size, and `check_onnx_export()` proves it before the run ends. Fixes ISSUE-020.
+  - Cause: with an example batch of 1, the default exporter (torch.export, PyTorch 2.13) fixes the batch size at 1 even though `dynamic_axes` marks it variable. Fix: an example batch of 2 and the dimension declared with `dynamic_shapes` (minimum 1).
+  - First tried `dynamo=False`, the older TorchScript exporter, which the ISSUE-020 entry suggested. It works, but PyTorch warns it is deprecated and will be removed, so it was replaced.
+  - Found by the new check while testing: exported from Apple's MPS device, the batch size came out fixed at **2** instead, while the same export from the CPU worked. The export now always runs on a CPU copy of the model.
+  - `check_onnx_export()` runs a batch of 3 through onnxruntime and PyTorch and raises if the shapes differ or the outputs differ by more than 1e-3. A broken export now fails the training run instead of failing later in whatever loads the model.
+  - The model is written as one file (`external_data=False`); a `.onnx.data` file left by an earlier export is removed.
+- `tests/test_scene_splits.py` - 4 tests: re-extraction after a relabel leaves no stale frames; another video with a similar ID keeps its frames; a video that won't open deletes nothing; the exported model runs a batch of 3 (exported from MPS when available). Extraction tests use a small synthetic video written with OpenCV.
+
+**Results:**
+- The stale-frame test fails with the cleanup switched off and passes with it.
+- The real ConvNeXt-Tiny model (8 classes), exported from MPS: batch of 3 matches PyTorch within 1.7e-6. Batches of 1, 3 and 7 checked separately on CPU: within 1.5e-6.
+- Fast tests: 79 passed, 6 xfailed. `ruff check` and `scripts/check_docs.py` pass.
+- No model was retrained.
+
+---
+
 ### November 25, 2026 - GAME! Screens Relabelled as Respawning (ISSUE-021)
 
 **Session Goal:** Make the labels in `XUkRx6CpL04` agree with the written rule that the GAME! screen is `respawning`.

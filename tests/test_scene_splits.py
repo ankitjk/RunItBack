@@ -149,3 +149,86 @@ def test_reindex_by_name_aligns_a_split_missing_a_class(tmp_path):
     labels = {Path(p).parent.name: t for p, t in test.samples}
     assert labels == {"one_airborne": 1, "respawning": 2}
     assert test.targets == [1, 2]
+
+
+def _write_test_video(path: Path, seconds: float = 4.0, fps: int = 10) -> None:
+    """A small synthetic video, so extraction can run without a real broadcast."""
+    cv2 = pytest.importorskip("cv2")
+    import numpy as np
+
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (64, 48))
+    for i in range(int(seconds * fps)):
+        writer.write(np.full((48, 64, 3), i % 255, dtype=np.uint8))
+    writer.release()
+
+
+def _labels(video_id: str, segments: list[tuple[float, float, str]]) -> dict:
+    return {
+        "video_id": video_id,
+        "games": [{"game_number": 1, "labels": [{"start_sec": a, "end_sec": b, "class": c} for a, b, c in segments]}],
+    }
+
+
+def test_reextraction_after_a_label_edit_leaves_no_stale_frames(tmp_path):
+    """ISSUE-021: frames from the old labels must not survive a re-extraction."""
+    video = tmp_path / "vid.mp4"
+    _write_test_video(video)
+    frames = tmp_path / "frames"
+
+    elf.extract_frames_from_video(video, _labels("vidA", [(0.0, 4.0, "non_gameplay")]), frames, elf.ExtractionStats())
+    assert list((frames / "non_gameplay").glob("*.jpg"))
+
+    # Relabel the second half, as the GAME! relabel did.
+    relabelled = _labels("vidA", [(0.0, 2.0, "non_gameplay"), (2.0, 4.0, "respawning")])
+    stats = elf.ExtractionStats()
+    elf.extract_frames_from_video(video, relabelled, frames, stats)
+
+    on_disk = elf.collect_frames(frames)
+    assert stats.stale_frames_removed > 0
+    assert len(on_disk) == stats.total_frames
+    assert all(f.time_sec < 2.0 for f in on_disk if f.scene_class == "non_gameplay")
+    assert {f.scene_class for f in on_disk} == {"non_gameplay", "respawning"}
+
+
+def test_reextraction_keeps_other_videos_frames(tmp_path):
+    video = tmp_path / "vid.mp4"
+    _write_test_video(video)
+    frames = tmp_path / "frames"
+    # Another video whose ID starts with this one's - must not be touched.
+    _make_frames(frames, "vidA_g2x", 1, 0, 3, "both_grounded")
+    other = sorted(p.name for p in frames.rglob("*.jpg"))
+
+    elf.extract_frames_from_video(video, _labels("vidA", [(0.0, 4.0, "non_gameplay")]), frames, elf.ExtractionStats())
+    elf.extract_frames_from_video(video, _labels("vidA", [(0.0, 4.0, "non_gameplay")]), frames, elf.ExtractionStats())
+
+    assert sorted(p.name for p in (frames / "both_grounded").glob("*.jpg")) == other
+
+
+def test_unopenable_video_does_not_delete_existing_frames(tmp_path):
+    frames = tmp_path / "frames"
+    _make_frames(frames, "vidA", 1, 0, 3, "both_grounded")
+    before = len(list(frames.rglob("*.jpg")))
+    stats = elf.ExtractionStats()
+
+    elf.extract_frames_from_video(tmp_path / "missing.mp4", _labels("vidA", []), frames, stats)
+
+    assert stats.errors and len(list(frames.rglob("*.jpg"))) == before
+
+
+def test_onnx_export_accepts_any_batch_size(tmp_path):
+    """ISSUE-020: the exported model must run on batches larger than 1."""
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("onnxruntime")
+    pytest.importorskip("torchvision")
+    tsc = _load_tool("train_scene_classifier")
+
+    model = torch.nn.Sequential(
+        torch.nn.Conv2d(3, 4, 3), torch.nn.AdaptiveAvgPool2d(1), torch.nn.Flatten(), torch.nn.Linear(4, 5)
+    )
+    path = tmp_path / "model.onnx"
+    (tmp_path / "model.onnx.data").write_bytes(b"stale")
+
+    device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+    tsc.export_onnx(model.to(device), path, input_size=32)  # raises if a batch of 3 fails
+
+    assert path.exists() and not (tmp_path / "model.onnx.data").exists()
