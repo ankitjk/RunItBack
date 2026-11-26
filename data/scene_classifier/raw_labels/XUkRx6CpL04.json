@@ -1075,11 +1075,16 @@
         },
         {
           "start_sec": 189.7,
-          "end_sec": 193.5,
+          "end_sec": 193.46,
           "class": "one_offstage"
         },
         {
-          "start_sec": 193.5,
+          "start_sec": 193.46,
+          "end_sec": 197.28,
+          "class": "respawning"
+        },
+        {
+          "start_sec": 197.28,
           "end_sec": 204.0,
           "class": "non_gameplay"
         }
@@ -2838,11 +2843,16 @@
         },
         {
           "start_sec": 424.0,
-          "end_sec": 426.1,
+          "end_sec": 425.9,
           "class": "one_offstage"
         },
         {
-          "start_sec": 426.1,
+          "start_sec": 425.9,
+          "end_sec": 429.61,
+          "class": "respawning"
+        },
+        {
+          "start_sec": 429.61,
           "end_sec": 437.1,
           "class": "non_gameplay"
         }
@@ -3971,11 +3981,16 @@
         },
         {
           "start_sec": 629.4,
-          "end_sec": 632.7,
+          "end_sec": 632.21,
           "class": "both_offstage"
         },
         {
-          "start_sec": 632.7,
+          "start_sec": 632.21,
+          "end_sec": 636.26,
+          "class": "respawning"
+        },
+        {
+          "start_sec": 636.26,
           "end_sec": 646.4,
           "class": "non_gameplay"
         }

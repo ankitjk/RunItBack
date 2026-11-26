@@ -8,6 +8,40 @@ The changelog of RunItBack: what changed in each session, why, and what was meas
 
 ## Changelog
 
+### November 25, 2026 - GAME! Screens Relabelled as Respawning (ISSUE-021)
+
+**Session Goal:** Make the labels in `XUkRx6CpL04` agree with the written rule that the GAME! screen is `respawning`.
+
+**Problem:**
+- `docs/SCENE_CLASSES.md` (written November 24) says the GAME! screen is `respawning`. The labels, made earlier, did the opposite in all three games: the last gameplay segment ran up to GAME!, and `non_gameplay` started there. A model trained on them learns the opposite of the rule, and the labeller's LLM, which follows the rule, was being scored wrong on those segments.
+- Owner's decision: keep the rule and relabel. The stretch before GO! stays `non_gameplay`.
+
+**Changes:**
+- `data/scene_classifier/raw_labels/XUkRx6CpL04.json` - in each game, a `respawning` segment from the first frame GAME! is visible to the first frame of the wipe to the results screen. Boundaries were read frame by frame at 60 fps and approved by the owner from the frames:
+
+  | Game | Before | After |
+  |---|---|---|
+  | 1 | `one_offstage` 189.7-193.5, `non_gameplay` 193.5-204.0 | `one_offstage` 189.7-193.46, `respawning` 193.46-197.28, `non_gameplay` 197.28-204.0 |
+  | 2 | `one_offstage` 424.0-426.1, `non_gameplay` 426.1-437.1 | `one_offstage` 424.0-425.9, `respawning` 425.9-429.61, `non_gameplay` 429.61-437.1 |
+  | 3 | `both_offstage` 629.4-632.7, `non_gameplay` 632.7-646.4 | `both_offstage` 629.4-632.21, `respawning` 632.21-636.26, `non_gameplay` 636.26-646.4 |
+
+  The old boundaries were 0.03-0.5s after GAME! first appears (frames 11608, 25554, 37933); the wipe starts at frames 11837, 25777, 38176. Nothing else in the file changed.
+- `docs/SCENE_CLASSES.md` - `non_gameplay` now states that entrance animations and the countdown before GO! are non-gameplay (this matches the existing labels: in all three games the first gameplay segment starts within 0.5s before GO! is detected). The GAME! bullet under `respawning` now says where it starts and ends.
+- `docs/ISSUES.md` - added ISSUE-021; ISSUE-006's `respawning` count updated.
+
+**Results:**
+- Clean re-extraction: 1,603 frames (was 1,583). `respawning` 63 -> 107 frames; validation now has 29 `respawning` frames where it had none.
+- ISSUE-021 found doing this: re-extracting over the existing folder left 72 stale frames, 22 of them old `non_gameplay` frames inside the new `respawning` stretches, and the split used them. Worked around by extracting into an empty folder.
+- No model was retrained. Every scene-classifier number recorded before this entry was measured against the old labels.
+- Fast tests: 75 passed, 6 xfailed. `scripts/check_docs.py` passes.
+
+**Left Open:**
+- ISSUE-021 - the extractor still does not clear a video's old frames.
+- The zoomed finishing blow before each GAME! is still labelled as the state before the zoom, pending the `finishing_blow` class.
+- `tools/scene_labeler.py`'s help text still describes a game-boundary convention ("first frame after GO! disappears") that the label file does not follow.
+
+---
+
 ### November 25, 2026 - Documentation Cleanup: Slimmer CLAUDE.md, ARCHITECTURE.md, Stale Facts
 
 **Session Goal:** Cut what is loaded into every Claude session, and remove or correct statements that no longer match the code.

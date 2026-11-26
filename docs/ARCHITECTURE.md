@@ -74,12 +74,12 @@ live path.
   figure.
 - **Class definitions:** [SCENE_CLASSES.md](SCENE_CLASSES.md) (11 classes; a
   12th, `finishing_blow`, is planned).
-- **Measured on unseen games** (retrained on current labels, game held out,
-  November 2026): 39-51% accuracy across runs; pooled 48.3% over three folds.
+- **Measured on unseen games** (game held out, November 16-24, 2026, before the
+  GAME! screens were relabelled as `respawning`): 39-51% accuracy across runs; pooled 48.3% over three folds.
   The same code on a random frame split scores 76.4% - the difference is
   near-duplicate frames leaking across splits. `respawning` recall is 97-100%,
   but its precision is 19-54%: rare classes are over-predicted.
-- **Labelled data:** one video (`XUkRx6CpL04`, 3 games, ~1,580 frames). This is
+- **Labelled data:** one video (`XUkRx6CpL04`, 3 games, ~1,600 frames). This is
   the main limit (ISSUE-006).
 
 Training workflow (`tools/`): `scene_labeler.py` (PyQt5; writes time-segment
