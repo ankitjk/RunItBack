@@ -5,48 +5,60 @@ A PyQt5-based tool for labeling video segments with scene states and stage infor
 Supports both local video files and YouTube URLs.
 
 Usage:
-    python tools/scene_labeler.py <video_path_or_youtube_url> [--labels <labels.json>]
+    .venv/bin/python tools/scene_labeler.py <video_path_or_youtube_url> [--labels <labels.json>]
 
 Examples:
-    python tools/scene_labeler.py path/to/video.mp4
-    python tools/scene_labeler.py "https://www.youtube.com/watch?v=VIDEO_ID"
-    python tools/scene_labeler.py "https://youtu.be/VIDEO_ID"
+    .venv/bin/python tools/scene_labeler.py path/to/video.mp4
+    .venv/bin/python tools/scene_labeler.py "https://www.youtube.com/watch?v=VIDEO_ID"
+    .venv/bin/python tools/scene_labeler.py "https://youtu.be/VIDEO_ID"
+
+Labels are saved to data/scene_classifier/raw_labels/<video_id>.json unless
+--labels is given.
 
 Keyboard Shortcuts:
-    0-9     : Start labeling with class (continuous mode - auto-extends until changed)
+    0-9, R  : Start labeling with class (continuous mode - auto-extends until changed)
     Space   : Pause/Play
     Left    : Previous frame (or 1 second if playing)
     Right   : Next frame (or 1 second if playing)
     S       : Reset segment start (finalizes current label if any)
     E       : Finalize current label at current position
     T       : Set stage for current game
-    G       : Mark new game boundary (at GO! for start, GAME! for end)
+    G       : Start the next game here (see Game Boundaries)
     Ctrl+S  : Save labels to file
     Ctrl+Z  : Undo last label
     Q       : Quit
 
 Labeling Workflow (Continuous Mode):
-    1. Press 0-9 to start labeling with a class
+    1. Press 0-9 or R to start labeling with a class
     2. Navigate through the video (the label extends as you go)
-    3. When the scene changes, press a different number key
+    3. When the scene changes, press a different class key
     4. The previous label is automatically closed and a new one starts
     5. Press E to finalize the last label when done
 
-Game Boundary Convention:
-    - Mark game START at: First frame after GO! disappears
-    - Mark game END at: Frame when GAME! appears
+Game Boundaries:
+    Games are contiguous: the first game starts at 0s, and each G press ends the
+    current game and starts the next one at that moment, so every second of the
+    video belongs to a game. Press G in the menus between two games - after the
+    previous game's results screen appears, before the next game's entrance.
+    The menus, entrances and countdown inside a game's span are labelled
+    non_gameplay like any other non-gameplay frame. Training splits by game, so
+    a boundary placed mid-gameplay would put one game's frames in two splits.
 
-Scene Classes:
-    0: non_gameplay     - Menus, loading screens, character select, results
-    1: both_grounded    - Both players standing/attacking on stage
-    2: one_airborne     - One in air, one on stage
-    3: both_airborne    - Both in the air
-    4: one_offstage     - One beyond stage edge
-    5: both_offstage    - Both off-stage
-    6: one_on_ledge     - One grabbing ledge
-    7: both_on_ledge    - Both grabbing ledge
-    8: one_knocked_down - One lying flat on stage
-    9: both_knocked_down- Both lying flat (trade)
+Scene Classes (full definitions and tie-breaks: docs/SCENE_CLASSES.md):
+    0: non_gameplay      - Menus, loading, results, pauses; entrances and countdown before GO!
+    1: both_grounded     - Both grounded within the stage
+    2: one_airborne      - One in the air within the stage, the other grounded
+    3: both_airborne     - Both in the air within the stage
+    4: one_offstage      - One off either side or below the stage
+    5: both_offstage     - Both off the sides or below the stage
+    6: one_on_ledge      - One hanging on a ledge
+    7: both_on_ledge     - Both hanging on a ledge
+    8: one_knocked_down  - One knocked down or teching
+    9: both_knocked_down - Both knocked down or teching
+    R: respawning        - KO flash or star KO, angel platform, stock count,
+                           GAME! or TIME! screen (until the wipe to results)
+    When the players' states differ, the higher-ranked one wins:
+    respawning > offstage > on_ledge > knocked_down > airborne > grounded.
 """
 
 import argparse
@@ -199,7 +211,7 @@ class SceneState(Enum):
     BOTH_ON_LEDGE = "both_on_ledge"
     ONE_KNOCKED_DOWN = "one_knocked_down"
     BOTH_KNOCKED_DOWN = "both_knocked_down"
-    RESPAWNING = "respawning"  # One player on angel platform after stock loss
+    RESPAWNING = "respawning"  # KO, respawn platform, stock count, or GAME! screen
 
 
 SCENE_LABELS = {
@@ -625,7 +637,7 @@ class LabelPanel(QWidget):
         self.segment_start_label = QLabel("Segment Start: --")
         segment_layout.addWidget(self.segment_start_label)
 
-        self.segment_class_label = QLabel("Class: (press 0-9 to label)")
+        self.segment_class_label = QLabel("Class: (press 0-9 or R to label)")
         segment_layout.addWidget(self.segment_class_label)
 
         layout.addWidget(segment_frame)
@@ -656,7 +668,7 @@ class LabelPanel(QWidget):
     def clear_segment_start(self):
         """Clear segment start display."""
         self.segment_start_label.setText("Segment Start: --")
-        self.segment_class_label.setText("Class: (press 0-9 to label)")
+        self.segment_class_label.setText("Class: (press 0-9 or R to label)")
 
     def update_segment_class(self, scene_class: SceneState):
         """Update segment class display."""
@@ -710,17 +722,17 @@ class LegendPanel(QWidget):
 
         # Class descriptions
         class_info = [
-            ("0", "non_gameplay", "Menus, loading, results"),
-            ("1", "both_grounded", "Both on stage, grounded"),
-            ("2", "one_airborne", "One jumping/launched"),
+            ("0", "non_gameplay", "Menus, results, pauses, pre-GO!"),
+            ("1", "both_grounded", "Both grounded"),
+            ("2", "one_airborne", "One in the air, one grounded"),
             ("3", "both_airborne", "Both in the air"),
-            ("4", "one_offstage", "One past stage edge"),
+            ("4", "one_offstage", "One off the side or below"),
             ("5", "both_offstage", "Both offstage"),
-            ("6", "one_on_ledge", "One grabbing ledge"),
-            ("7", "both_on_ledge", "Both on ledge"),
-            ("8", "one_knocked_down", "One lying flat (tech)"),
-            ("9", "both_knocked_down", "Both down (trade)"),
-            ("R", "respawning", "On angel platform"),
+            ("6", "one_on_ledge", "One on a ledge"),
+            ("7", "both_on_ledge", "Both on a ledge"),
+            ("8", "one_knocked_down", "One knocked down or teching"),
+            ("9", "both_knocked_down", "Both knocked down or teching"),
+            ("R", "respawning", "KO, angel platform, GAME!"),
         ]
 
         for key, class_name, description in class_info:
@@ -760,11 +772,13 @@ class LegendPanel(QWidget):
         shortcuts = [
             ("Space", "Play/Pause"),
             ("← →", "Prev/Next frame"),
+            ("S", "Reset segment start"),
             ("E", "Finalize label"),
-            ("G", "Game boundary"),
+            ("G", "Next game starts here"),
             ("T", "Set stage"),
             ("Ctrl+S", "Save"),
             ("Ctrl+Z", "Undo"),
+            ("Q", "Quit"),
         ]
 
         for key, action in shortcuts:
@@ -1017,7 +1031,7 @@ class SceneLabeler(QMainWindow):
         self.current_class = None
         self.label_panel.update_segment_start(self.segment_start)
         self.statusBar().showMessage(
-            f"Segment start: {self.segment_start:.1f}s. Press 0-9 to assign class."
+            f"Segment start: {self.segment_start:.1f}s. Press 0-9 or R to assign class."
         )
 
     def _mark_segment_end(self):
@@ -1028,13 +1042,13 @@ class SceneLabeler(QMainWindow):
                 return
 
         if self.segment_start is None:
-            self.statusBar().showMessage("Press S first to mark segment start, or press 0-9 to start labeling.")
+            self.statusBar().showMessage("Press S first to mark segment start, or press 0-9 or R to start labeling.")
             return
 
         # Show where end would be
         end_time = self.player.get_current_time()
         self.statusBar().showMessage(
-            f"Segment: {self.segment_start:.1f}s - {end_time:.1f}s. Press 0-9 to assign class."
+            f"Segment: {self.segment_start:.1f}s - {end_time:.1f}s. Press 0-9 or R to assign class."
         )
 
     def _assign_class(self, class_num: int):
@@ -1142,11 +1156,11 @@ class SceneLabeler(QMainWindow):
             self.statusBar().showMessage(f"Stage set to: {dialog.get_stage()}")
 
     def _mark_game_boundary(self):
-        """Mark a new game boundary at current position.
+        """End the current game here and start the next one at the same moment.
 
-        Convention: Mark game boundaries at:
-        - Game start: First frame after GO! disappears (gameplay begins)
-        - Game end: Frame when GAME! appears (gameplay ends)
+        Games are contiguous. Press G in the menus between two games, after the
+        previous game's results screen appears (see Game Boundaries in the
+        module docstring).
         """
         # Finalize any active label first
         if self.current_class is not None:

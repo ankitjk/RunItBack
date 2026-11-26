@@ -15,7 +15,7 @@ with the `/issues` skill.
 - Planned features (edgeguard detection, Slippi, etc.) are not issues - they live
   under "Future Improvements" in `docs/DEVELOPMENT.md`.
 
-**Next ID:** ISSUE-022
+**Next ID:** ISSUE-024
 
 Severity: **High** = causes wrong results on real videos. **Medium** = blocks
 measuring or improving accuracy. **Low** = tooling, docs, or performance.
@@ -23,6 +23,36 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 ---
 
 ## High
+
+### ISSUE-022: Character select screen detected as GO!, so games start up to 22s early
+- **Area:** Game boundaries - **Found:** 2026-11-26, running GO!/GAME! detection
+  on `XUkRx6CpL04` (the labelled video; detection was tuned on the 6 benchmark sets)
+- **What happens:** `detect_go_screen` fires on the character select screen
+  (a grid of yellow and orange portraits in the centre). Pairing keeps the first
+  GO! after the previous game, so each game starts at character select and its
+  span takes in character select, stage select and the entrances.
+- **Evidence:** `XUkRx6CpL04` games start at 8.5s / 219.5s / 450.5s; the real GO!
+  screens are at 31.0s / 237.5s / 466.0s (15.5-22.5s early). Game count and ends
+  are right. `test_timestamp_accuracy` allows 30s, so it would not catch this.
+- **Where:** `runitback/cv/ui_detector.py:507` (`detect_go_screen`),
+  `runitback/cli.py:272` (first GO! taken)
+- **Suggested fix:** Accept a GO! only when gameplay-HUD frames follow it, or
+  take the last GO! candidate before the HUD appears.
+
+### ISSUE-023: A missed GO! drops a game; a missed GAME! merges two games
+- **Area:** Game boundaries - **Found:** 2026-11-26, reading `detect_games`;
+  confirmed with stubbed detectors
+- **What happens:** Games are built only from GO! markers, and only the first
+  GO! after each GAME! is kept. A game whose GO! is not detected is missing from
+  the report. If a GAME! before the last game is missed, the next game's GO! is
+  discarded and the two games are reported as one.
+- **Evidence:** Synthetic 3-game set run through the real pairing code: game 2's
+  GO! missed -> 2 games, game 2 absent; game 2's GAME! missed -> 2 games, the
+  second spanning games 2 and 3. Not yet seen on a real video: every GO! and
+  GAME! was detected in 23 games across 7 videos (2026-11-26).
+- **Where:** `runitback/cli.py:266` (pairing), `runitback/cli.py:315` (games from GO! only)
+- **Suggested fix:** Emit a game for a validated GAME! with no GO! before it
+  (start at the gameplay-HUD onset), and keep every GO! that has gameplay after it.
 
 ### ISSUE-001: OCR reads player tags as damage
 - **Area:** OCR - **Found:** 2026-10-23, `ocr-investigator` on Steve vs Palutena 1:39
