@@ -74,6 +74,8 @@ shows a slight yellow flash). The other player is within the stage.
 - the stock count shown in the centre of the screen as a player respawns
 - **the GAME! screen**, from the first frame GAME! appears until the wipe to the
   results screen begins; `non_gameplay` starts at the wipe's first frame
+- **the TIME! screen** shown when the clock runs out, by the same rule as GAME!
+  (added 2026-11-26; no labelled video has one yet)
 
 Cue: until the respawn platform appears, one or both players have **no damage
 percentage** shown on their HUD. If either player is respawning, the frame is
