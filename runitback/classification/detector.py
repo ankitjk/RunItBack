@@ -1098,6 +1098,12 @@ class GameStateDetector:
             # Neutral (shouldn't reach here in disadvantage)
             "both_grounded": DisadvantageType.UNKNOWN,
             "non_gameplay": DisadvantageType.UNKNOWN,
+            # Whole-screen classes (2026-11-26). The GAME!/TIME! screen is
+            # game_end, no longer part of a respawning run; the final-stock red
+            # flash gets no tag of its own (the hit is already counted).
+            "pre_game": DisadvantageType.UNKNOWN,
+            "game_end": DisadvantageType.UNKNOWN,
+            "finishing_blow": DisadvantageType.UNKNOWN,
         }
 
         return scene_to_disadvantage.get(scene_state, DisadvantageType.UNKNOWN)

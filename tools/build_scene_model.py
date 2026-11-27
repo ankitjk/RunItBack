@@ -5,7 +5,7 @@ Each run gets its own folder, data/models/runs/<name>/, holding the ONNX model,
 class_mapping.json, test_metrics.json, the split manifest, the training history
 and run.json (what was trained on and how). The deployed model,
 data/models/scene_classifier.onnx, is never touched: deploying a retrained model
-needs ISSUE-017 fixed first, and is a separate decision.
+(copying its ONNX file and class_mapping.json there) is a separate decision.
 
 Usage:
     .venv/bin/python tools/build_scene_model.py [--test-game 3 | --test-video VIDEO_ID] [--name NAME]

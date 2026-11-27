@@ -4,6 +4,7 @@ Uses a trained ConvNeXt-Tiny model to classify gameplay frames into
 positional states (grounded, airborne, offstage, ledge, knocked down).
 """
 
+import json
 import logging
 from dataclasses import dataclass
 from enum import Enum
@@ -15,6 +16,35 @@ logger = logging.getLogger(__name__)
 
 # Default model path
 DEFAULT_MODEL_PATH = Path(__file__).parent.parent.parent / "data" / "models" / "scene_classifier.onnx"
+
+# The output order of the deployed model (October 2026), which predates
+# class_mapping.json: ImageFolder's alphabetical order of its 7 classes. Used
+# only for a model with no class_mapping.json beside it.
+LEGACY_CLASS_ORDER = [
+    "both_airborne",
+    "both_grounded",
+    "both_offstage",
+    "non_gameplay",
+    "one_airborne",
+    "one_offstage",
+    "respawning",
+]
+
+
+def load_class_order(model_path: Path) -> list[str]:
+    """The model's class names, by output index.
+
+    Read from class_mapping.json next to the model, which training writes
+    ({"0": "both_airborne", ...}). Every retrained model has its own order and
+    number of classes, so a fixed list would name predictions wrongly
+    (ISSUE-017). A model without the file is the legacy deployed model.
+    """
+    mapping_path = model_path.parent / "class_mapping.json"
+    if not mapping_path.exists():
+        return list(LEGACY_CLASS_ORDER)
+    mapping = json.loads(mapping_path.read_text())
+    order = [mapping[str(i)] for i in range(len(mapping))]  # KeyError if indices are not 0..n-1
+    return order
 
 
 class SceneState(Enum):
@@ -41,7 +71,12 @@ class SceneState(Enum):
     BOTH_KNOCKED_DOWN = "both_knocked_down"  # Both down (trade)
 
     # Special states
-    RESPAWNING = "respawning"  # Invincibility platform visible
+    RESPAWNING = "respawning"  # KO flash or star KO, respawn platform, stock count
+
+    # Whole-screen states (added 2026-11-26; docs/SCENE_CLASSES.md)
+    PRE_GAME = "pre_game"  # Entrances and countdown, until GO!
+    GAME_END = "game_end"  # GAME! or TIME! screen, until the white flash
+    FINISHING_BLOW = "finishing_blow"  # The final-stock red flash
 
     # Fallback
     UNKNOWN = "unknown"
@@ -53,8 +88,12 @@ class SceneState(Enum):
 
     @property
     def is_gameplay(self) -> bool:
-        """Whether this state represents active gameplay."""
-        return self not in (SceneState.NON_GAMEPLAY, SceneState.UNKNOWN)
+        """Whether this state represents active gameplay.
+
+        pre_game and game_end are screens before and after play; a finishing
+        blow is a moment of play, shown with a red flash.
+        """
+        return self not in (SceneState.NON_GAMEPLAY, SceneState.PRE_GAME, SceneState.GAME_END, SceneState.UNKNOWN)
 
     @property
     def display_name(self) -> str:
@@ -71,6 +110,9 @@ class SceneState(Enum):
             SceneState.ONE_KNOCKED_DOWN: "One Knocked Down",
             SceneState.BOTH_KNOCKED_DOWN: "Both Knocked Down",
             SceneState.RESPAWNING: "Respawning",
+            SceneState.PRE_GAME: "Pre-Game",
+            SceneState.GAME_END: "Game End",
+            SceneState.FINISHING_BLOW: "Finishing Blow",
             SceneState.UNKNOWN: "Unknown",
         }
         return names.get(self, self.value)
@@ -97,31 +139,8 @@ class SceneClassifier:
     Includes temporal smoothing to reduce frame-to-frame jitter.
     """
 
-    # Class order must match training (alphabetical by folder name)
-    CLASS_ORDER = [
-        "both_airborne",
-        "both_grounded",
-        "both_offstage",
-        "non_gameplay",
-        "one_airborne",
-        "one_offstage",
-        "respawning",
-    ]
-
-    # Map class names to SceneState
-    CLASS_TO_STATE = {
-        "both_airborne": SceneState.BOTH_AIRBORNE,
-        "both_grounded": SceneState.BOTH_GROUNDED,
-        "both_offstage": SceneState.BOTH_OFFSTAGE,
-        "both_on_ledge": SceneState.BOTH_ON_LEDGE,
-        "both_knocked_down": SceneState.BOTH_KNOCKED_DOWN,
-        "non_gameplay": SceneState.NON_GAMEPLAY,
-        "one_airborne": SceneState.ONE_AIRBORNE,
-        "one_offstage": SceneState.ONE_OFFSTAGE,
-        "one_on_ledge": SceneState.ONE_ON_LEDGE,
-        "one_knocked_down": SceneState.ONE_KNOCKED_DOWN,
-        "respawning": SceneState.RESPAWNING,
-    }
+    # Map class names to SceneState (every class name is a SceneState value)
+    CLASS_TO_STATE = {state.value: state for state in SceneState if state != SceneState.UNKNOWN}
 
     def __init__(
         self,
@@ -143,6 +162,8 @@ class SceneClassifier:
         self._session = None
         self._history: list[SceneState] = []
         self._available = False
+        # The model's class names by output index (load_class_order)
+        self.class_order: list[str] = []
 
         # ImageNet normalization (same as training)
         self._mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
@@ -155,6 +176,15 @@ class SceneClassifier:
         if not self.model_path.exists():
             logger.warning(f"Scene classifier model not found: {self.model_path}")
             return
+
+        try:
+            self.class_order = load_class_order(self.model_path)
+        except (OSError, ValueError, KeyError) as e:
+            logger.error(f"Scene classifier disabled: unreadable class_mapping.json beside {self.model_path}: {e}")
+            return
+        unknown = [name for name in self.class_order if name not in self.CLASS_TO_STATE]
+        if unknown:
+            logger.warning(f"Scene classifier classes not known to RunItBack, reported as unknown: {unknown}")
 
         try:
             import onnxruntime as ort
@@ -172,6 +202,14 @@ class SceneClassifier:
                         str(self.model_path),
                         providers=providers,
                     )
+                    n_outputs = session.get_outputs()[0].shape[-1]
+                    if isinstance(n_outputs, int) and n_outputs != len(self.class_order):
+                        # Wrong names on every prediction is worse than none
+                        logger.error(
+                            f"Scene classifier disabled: the model has {n_outputs} outputs but its "
+                            f"class list has {len(self.class_order)} ({self.model_path})"
+                        )
+                        return
                     self._session = session
                     self._available = True
                     active_providers = session.get_providers()
@@ -250,13 +288,13 @@ class SceneClassifier:
         # Get prediction
         pred_idx = np.argmax(probs)
         confidence = float(probs[pred_idx])
-        class_name = self.CLASS_ORDER[pred_idx]
+        class_name = self.class_order[pred_idx]
         state = self.CLASS_TO_STATE.get(class_name, SceneState.UNKNOWN)
 
         # Build probability dict
         raw_probs = {
-            self.CLASS_ORDER[i]: float(probs[i])
-            for i in range(len(self.CLASS_ORDER))
+            self.class_order[i]: float(probs[i])
+            for i in range(len(self.class_order))
         }
 
         # Apply temporal smoothing
@@ -315,12 +353,12 @@ class SceneClassifier:
 
             pred_idx = np.argmax(probs)
             confidence = float(probs[pred_idx])
-            class_name = self.CLASS_ORDER[pred_idx]
+            class_name = self.class_order[pred_idx]
             state = self.CLASS_TO_STATE.get(class_name, SceneState.UNKNOWN)
 
             raw_probs = {
-                self.CLASS_ORDER[j]: float(probs[j])
-                for j in range(len(self.CLASS_ORDER))
+                self.class_order[j]: float(probs[j])
+                for j in range(len(self.class_order))
             }
 
             results.append(SceneClassification(

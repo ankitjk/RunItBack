@@ -69,9 +69,15 @@ run with onnxruntime one frame at a time; a 5-frame median filter smooths the
 live path.
 
 - **Deployed model** (`data/models/scene_classifier.onnx`, fetched by
-  `scripts/fetch_model.sh`): 7 classes, hardcoded in `CLASS_ORDER` (ISSUE-017).
-  Trained on a random frame split of one video, so it has no honest accuracy
-  figure.
+  `scripts/fetch_model.sh`): 7 classes. Trained on a random frame split of one
+  video, so it has no honest accuracy figure.
+- **Class names** come from the `class_mapping.json` beside the model (index ->
+  name, written by training); the deployed model predates that file and uses
+  `LEGACY_CLASS_ORDER`. A model whose output count does not match its class
+  list is disabled rather than mislabelled. `pre_game` and `game_end` are not
+  gameplay (`SceneState.is_gameplay`); the stock-loss rules key on
+  `respawning`, so a GAME! screen predicted as `game_end` no longer extends a
+  respawn run.
 - **Class definitions:** [SCENE_CLASSES.md](SCENE_CLASSES.md): 14 classes. The
   label tool, extraction and training share one list (`SCENE_CLASSES` in
   `tools/label_segments.py`); `pre_game`, `game_end` and `finishing_blow`
@@ -104,7 +110,8 @@ then
   scores the test set once, writes `test_metrics.json` and `class_mapping.json`,
   and exports ONNX that accepts any batch size, checked against PyTorch before
   the run ends.
-- It never writes the deployed model's folder; deploying needs ISSUE-017 fixed.
+- It never writes the deployed model's folder; deploying (copying a run's ONNX
+  file and `class_mapping.json` there) is a separate decision.
 
 ## 5. Game state
 

@@ -8,6 +8,28 @@ The changelog of RunItBack: what changed in each session, why, and what was meas
 
 ## Changelog
 
+### November 27, 2026 - Inference Reads the Model's Own Classes (ISSUE-017)
+
+**Session Goal:** Step 3, part 2: let `analyze` use any trained model, including the coming 14-class one.
+
+**Problem:** ISSUE-017. `SceneClassifier.CLASS_ORDER` hardcoded the deployed model's 7 classes. Checked on the step-1 baseline model (8 classes): its index 6 is `one_on_ledge`, which the fixed list called `respawning`, and index 7 would have raised `IndexError`.
+
+**Changes:**
+- `runitback/cv/scene_classifier.py`:
+  - `load_class_order()` reads the class names from the `class_mapping.json` that training writes beside the model; a model without one is the legacy deployed model (`LEGACY_CLASS_ORDER`, its 7 classes). Fixes ISSUE-017.
+  - A model whose output count does not match its class list is disabled with an error, not run with wrong names; class names RunItBack does not know are reported as `unknown` with a warning.
+  - `SceneState` gains `PRE_GAME`, `GAME_END`, `FINISHING_BLOW`. `pre_game` and `game_end` are not gameplay; `finishing_blow` is. `CLASS_TO_STATE` is built from the enum.
+- `runitback/classification/detector.py` - explicit (empty) disadvantage tags for the three new classes. The stock-loss rules key on `respawning` alone, so a GAME! screen predicted as `game_end` no longer extends a respawn run; no rule changed.
+- `tests/test_scene_classifier.py` (new, 7 tests) - mapping read, legacy fallback, a malformed mapping rejected, predictions named from the model's own classes (a fake ONNX session answering index 6 and 7 of 8), a mismatched model disabled, every labelled class a `SceneState`, the gameplay test.
+- `CLAUDE.md`, `docs/ARCHITECTURE.md`, `tools/build_scene_model.py`, `tools/train_scene_classifier.py` - deploying a run's model is now possible (copy its ONNX file and `class_mapping.json`); still a separate decision, not made.
+
+**Results:**
+- Real models, loaded and run on three frames of `XUkRx6CpL04` (10.0s, 85.0s, 200.5s): the deployed model (no mapping) predicts `non_gameplay`, `both_offstage`, `non_gameplay` as before; the 8-class baseline loads its own names (`non_gameplay`, `both_offstage`, `one_on_ledge`); the baseline with a 2-name mapping is disabled with an error.
+- Fast suite: 142 passed, 6 xfailed (with the gold-guard commit before it). mypy: no issues.
+- The deployed model is unchanged, so `analyze` output is unchanged; the stock-loss benchmark was not rerun.
+
+---
+
 ### November 27, 2026 - Gold Videos Cannot Reach Training
 
 **Session Goal:** Before the owner starts hand-labelling the two gold games (plan step 4), make sure they can never be trained on.
@@ -1082,15 +1104,16 @@ game 3, 41% of game time was accepted that way and 22% of it was wrong). So:
      changes its class, or moves one of its edges; unchanged on pieces left by
      a cut or an overwrite.
 3. **The three new classes, end to end.**
-   - Keys in the label tool (0-9 and R are taken; proposed P = `pre_game`,
-     X = `game_end`, F = `finishing_blow`).
-   - Training class list.
-   - ISSUE-017: inference reads the class order from `class_mapping.json`.
-   - Code that uses class names: the `SceneState` enum and its gameplay test
-     in `runitback/cv/scene_classifier.py` (`pre_game` and `game_end` are not
-     gameplay), and the `respawning` rules and disadvantage tags in
-     `runitback/classification/detector.py` (the GAME! screen is no longer
-     part of a `respawning` run).
+   - *(Done 2026-11-27.)* Keys P = `pre_game`, X = `game_end`,
+     F = `finishing_blow` in the label tool; one shared class list for the
+     tool, extraction and training.
+   - *(Done 2026-11-27.)* ISSUE-017: inference reads the class order from
+     `class_mapping.json`.
+   - *(Done 2026-11-27.)* Code that uses class names: the `SceneState` enum
+     and its gameplay test (`pre_game` and `game_end` are not gameplay), and
+     the detector's disadvantage tags. Its `respawning` rules needed no change:
+     they key on `respawning` alone, so a GAME! screen predicted as `game_end`
+     is no longer part of a respawn run.
    - **Relabel `XUkRx6CpL04`** with the step-2 editing. Claude proposes
      frame-exact times; the owner approves before anything is written:
      - `game_end`: the 3 GAME! segments, a class change only.

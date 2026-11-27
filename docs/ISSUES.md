@@ -138,18 +138,6 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 - **Suggested fix:** Distinguish "no text in this crop" from "the engine failed":
   re-raise, or abort after N consecutive engine errors.
 
-### ISSUE-017: Inference hardcodes the deployed model's 7 classes
-- **Area:** Scene classifier - **Found:** 2026-11-16, adding test-set evaluation to training
-- **What happens:** `SceneClassifier.CLASS_ORDER` lists the 7 classes the
-  deployed model was trained on, in ImageFolder's alphabetical order. A model
-  retrained on today's labels has 9-10 outputs in a different order, so a
-  prediction at index 7+ raises `IndexError` and lower indices are given the
-  wrong names (index 3 is `both_on_ledge`, not `non_gameplay`). A retrained
-  model cannot be deployed without hand-editing this list.
-- **Where:** `runitback/cv/scene_classifier.py:101` (list), `:253` and `:318` (lookups)
-- **Suggested fix:** Read the order from the `class_mapping.json` that training
-  writes next to the model, falling back to the current list for the old model.
-
 ### ISSUE-006: Too little labeled data to retrain the scene classifier
 - **Area:** Scene classifier - **Found:** 2026-10-23, `label-auditor`
 - **What happens:** The whole corpus is one video (`XUkRx6CpL04`). `respawning`
@@ -201,6 +189,7 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 One line per fixed issue, newest first:
 `- ISSUE-NNN: <title> (fixed YYYY-MM-DD, DEVELOPMENT.md <Month D, YYYY>)`
 
+- ISSUE-017: Inference hardcodes the deployed model's 7 classes (fixed 2026-11-27, DEVELOPMENT.md November 27, 2026)
 - ISSUE-025: Labelling over existing labels in the label tool stacks a second, overlapping label (fixed 2026-11-27, DEVELOPMENT.md November 27, 2026)
 - ISSUE-024: Label tool's S mark is ignored: the next class key starts the label at the playhead (fixed 2026-11-27, DEVELOPMENT.md November 27, 2026)
 - ISSUE-021: Re-extracting frames after a label edit leaves stale frames (fixed 2026-11-25, DEVELOPMENT.md November 25, 2026)
