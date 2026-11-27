@@ -15,7 +15,7 @@ with the `/issues` skill.
 - Planned features (edgeguard detection, Slippi, etc.) are not issues - they live
   under "Future Improvements" in `docs/DEVELOPMENT.md`.
 
-**Next ID:** ISSUE-024
+**Next ID:** ISSUE-026
 
 Severity: **High** = causes wrong results on real videos. **Medium** = blocks
 measuring or improving accuracy. **Low** = tooling, docs, or performance.
@@ -201,6 +201,8 @@ measuring or improving accuracy. **Low** = tooling, docs, or performance.
 One line per fixed issue, newest first:
 `- ISSUE-NNN: <title> (fixed YYYY-MM-DD, DEVELOPMENT.md <Month D, YYYY>)`
 
+- ISSUE-025: Labelling over existing labels in the label tool stacks a second, overlapping label (fixed 2026-11-27, DEVELOPMENT.md November 27, 2026)
+- ISSUE-024: Label tool's S mark is ignored: the next class key starts the label at the playhead (fixed 2026-11-27, DEVELOPMENT.md November 27, 2026)
 - ISSUE-021: Re-extracting frames after a label edit leaves stale frames (fixed 2026-11-25, DEVELOPMENT.md November 25, 2026)
 - ISSUE-020: Exported scene model only accepts a batch of 1 (fixed 2026-11-25, DEVELOPMENT.md November 25, 2026)
 - ISSUE-019: Retraining on current labels collapses onto a 1-frame class; `class_mapping.json` written in the wrong order (fixed 2026-11-16, DEVELOPMENT.md November 16, 2026)

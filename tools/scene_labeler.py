@@ -20,12 +20,17 @@ Keyboard Shortcuts:
     Space   : Pause/Play
     Left    : Previous frame (or 1 second if playing)
     Right   : Next frame (or 1 second if playing)
-    S       : Reset segment start (finalizes current label if any)
-    E       : Finalize current label at current position
+    S       : Set a mark here; the next class key labels from the mark to the playhead
+    E       : Close the open label here
+    C       : Change the class of the target segment (then press a class key)
+    K       : Cut the segment under the playhead in two here
+    [ / ]   : Move the target segment's start / end to the playhead
+    Delete  : Delete the target segment (Backspace too)
+    Esc     : Cancel the open label, mark or change; clear the selection
     T       : Set stage for current game
     G       : Start the next game here (see Game Boundaries)
     Ctrl+S  : Save labels to file
-    Ctrl+Z  : Undo last label
+    Ctrl+Z  : Undo the last change (labels, game boundary or stage)
     Q       : Quit
 
 Labeling Workflow (Continuous Mode):
@@ -34,6 +39,15 @@ Labeling Workflow (Continuous Mode):
     3. When the scene changes, press a different class key
     4. The previous label is automatically closed and a new one starts
     5. Press E to finalize the last label when done
+
+Editing Labels:
+    Labelling time that is already labelled replaces what was there, so two
+    segments never cover the same frame. Times are stored per frame, not rounded.
+    - Relabel a stretch: S at one end, move to the other end, press the class key.
+    - The target segment is the one selected in the table (click a row; double-
+      click jumps to it), or else the one under the playhead.
+    - Edits are refused while a continuous label is open: E closes it, Esc drops it.
+    Fields this tool does not use (e.g. needs_review in a draft) are kept on save.
 
 Game Boundaries:
     Games are contiguous: the first game starts at 0s, and each G press ends the
@@ -62,12 +76,13 @@ Scene Classes (full definitions and tie-breaks: docs/SCENE_CLASSES.md):
 """
 
 import argparse
+import copy
 import hashlib
 import json
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 
@@ -96,6 +111,23 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
+)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from label_segments import (  # noqa: E402
+    EditError,
+    GameLabels,
+    SegmentLabel,
+    VideoLabels,
+    delete,
+    frame_time,
+    move_edge,
+    overlaps,
+    overwrite,
+    segment_at,
+    set_class,
+    split,
 )
 
 # =============================================================================
@@ -265,84 +297,6 @@ STAGE_DISPLAY_NAMES = {
 }
 
 
-@dataclass
-class SegmentLabel:
-    """A labeled segment of video."""
-    start_sec: float
-    end_sec: float
-    scene_class: str
-
-
-@dataclass
-class GameLabels:
-    """Labels for a single game within a video."""
-    game_number: int
-    stage: str = "unknown"
-    start_sec: float = 0.0
-    end_sec: float = 0.0
-    labels: list[SegmentLabel] = field(default_factory=list)
-
-
-@dataclass
-class VideoLabels:
-    """All labels for a video."""
-    video_id: str
-    video_path: str
-    games: list[GameLabels] = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        """Convert to dictionary for JSON serialization."""
-        return {
-            "video_id": self.video_id,
-            "video_path": self.video_path,
-            "games": [
-                {
-                    "game_number": g.game_number,
-                    "stage": g.stage,
-                    "start_sec": g.start_sec,
-                    "end_sec": g.end_sec,
-                    "labels": [
-                        {
-                            "start_sec": lbl.start_sec,
-                            "end_sec": lbl.end_sec,
-                            "class": lbl.scene_class,
-                        }
-                        for lbl in g.labels
-                    ],
-                }
-                for g in self.games
-            ],
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "VideoLabels":
-        """Create from dictionary."""
-        games = []
-        for g in data.get("games", []):
-            labels = [
-                SegmentLabel(
-                    start_sec=lbl["start_sec"],
-                    end_sec=lbl["end_sec"],
-                    scene_class=lbl["class"],
-                )
-                for lbl in g.get("labels", [])
-            ]
-            games.append(
-                GameLabels(
-                    game_number=g["game_number"],
-                    stage=g.get("stage", "unknown"),
-                    start_sec=g.get("start_sec", 0.0),
-                    end_sec=g.get("end_sec", 0.0),
-                    labels=labels,
-                )
-            )
-        return cls(
-            video_id=data["video_id"],
-            video_path=data.get("video_path", ""),
-            games=games,
-        )
-
-
 class StageDialog(QDialog):
     """Dialog for selecting stage."""
 
@@ -423,8 +377,8 @@ class VideoPlayer(QWidget):
         self.play_btn.clicked.connect(self.toggle_play)
         controls.addWidget(self.play_btn)
 
-        self.time_label = QLabel("0:00.0 / 0:00.0")
-        self.time_label.setMinimumWidth(150)
+        self.time_label = QLabel("0:00.00 / 0:00.00")
+        self.time_label.setMinimumWidth(240)
         controls.addWidget(self.time_label)
 
         controls.addWidget(QLabel("Speed:"))
@@ -479,6 +433,7 @@ class VideoPlayer(QWidget):
         total_time = self.total_frames / self.fps
         self.time_label.setText(
             f"{self._format_time(current_time)} / {self._format_time(total_time)}"
+            f"   frame {self.current_frame}"
         )
 
         self.frame_changed.emit(self.current_frame, current_time)
@@ -511,10 +466,10 @@ class VideoPlayer(QWidget):
             self._update_display()
 
     def _format_time(self, seconds: float) -> str:
-        """Format seconds as M:SS.s"""
+        """Format seconds as M:SS.ss"""
         mins = int(seconds // 60)
         secs = seconds % 60
-        return f"{mins}:{secs:04.1f}"
+        return f"{mins}:{secs:05.2f}"
 
     def _on_timeline_change(self, value: int):
         """Handle timeline slider change."""
@@ -568,9 +523,8 @@ class VideoPlayer(QWidget):
         self._display_frame()
 
     def seek_time(self, seconds: float):
-        """Seek to specific time."""
-        frame = int(seconds * self.fps)
-        self.seek_frame(frame)
+        """Seek to the frame a stored time names (stored times are rounded, so round back)."""
+        self.seek_frame(round(seconds * self.fps))
 
     def step_forward(self):
         """Step forward one frame."""
@@ -607,6 +561,7 @@ class LabelPanel(QWidget):
     """Panel for displaying and managing labels."""
 
     label_selected = pyqtSignal(float)  # timestamp to seek to
+    selection_changed = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -648,7 +603,11 @@ class LabelPanel(QWidget):
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels(["Start", "End", "Class"])
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        # Cells are not editable text: edits go through the keys, which keep segments consistent
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.cellDoubleClicked.connect(self._on_cell_double_click)
+        self.table.itemSelectionChanged.connect(self.selection_changed.emit)
         layout.addWidget(self.table)
 
         # Stats
@@ -661,9 +620,13 @@ class LabelPanel(QWidget):
         stage_name = STAGE_DISPLAY_NAMES.get(game.stage, game.stage)
         self.stage_label.setText(f"Stage: {stage_name}")
 
-    def update_segment_start(self, time_sec: float):
-        """Update segment start display."""
-        self.segment_start_label.setText(f"Segment Start: {time_sec:.1f}s")
+    def update_segment_start(self, time_sec: float, mark: bool = False):
+        """Show where the open label starts, or where the mark is."""
+        if mark:
+            self.segment_start_label.setText(f"Mark: {time_sec:.3f}s")
+            self.segment_class_label.setText("Class: (press a class key to label mark to playhead)")
+        else:
+            self.segment_start_label.setText(f"Segment Start: {time_sec:.3f}s")
 
     def clear_segment_start(self):
         """Clear segment start display."""
@@ -677,12 +640,28 @@ class LabelPanel(QWidget):
             f'Class: <span style="color:{color};">{scene_class.value}</span>'
         )
 
+    def selected_index(self) -> int | None:
+        """Row selected in the table (rows are the game's segments in order), or None."""
+        rows = self.table.selectionModel().selectedRows()
+        return rows[0].row() if rows else None
+
+    def select_row(self, row: int | None):
+        """Select a row and scroll to it, or clear the selection."""
+        if row is None or not 0 <= row < self.table.rowCount():
+            self.table.clearSelection()
+            return
+        self.table.selectRow(row)
+        self.table.scrollToItem(self.table.item(row, 0))
+
     def update_labels(self, labels: list[SegmentLabel]):
-        """Update labels table."""
+        """Update labels table. Clears the selection: rows may have moved."""
+        self.table.blockSignals(True)
+        self.table.clearSelection()
         self.table.setRowCount(len(labels))
+        self.table.blockSignals(False)
         for i, label in enumerate(labels):
-            self.table.setItem(i, 0, QTableWidgetItem(f"{label.start_sec:.1f}s"))
-            self.table.setItem(i, 1, QTableWidgetItem(f"{label.end_sec:.1f}s"))
+            self.table.setItem(i, 0, QTableWidgetItem(f"{label.start_sec:.3f}s"))
+            self.table.setItem(i, 1, QTableWidgetItem(f"{label.end_sec:.3f}s"))
 
             class_item = QTableWidgetItem(label.scene_class)
             # Find the matching SceneState for color
@@ -772,12 +751,17 @@ class LegendPanel(QWidget):
         shortcuts = [
             ("Space", "Play/Pause"),
             ("← →", "Prev/Next frame"),
-            ("S", "Reset segment start"),
-            ("E", "Finalize label"),
+            ("S", "Mark; class key labels mark→here"),
+            ("E", "Close open label here"),
+            ("C", "Change class of target"),
+            ("K", "Cut segment here"),
+            ("[  ]", "Move target start / end here"),
+            ("Delete", "Delete target"),
+            ("Esc", "Cancel; clear selection"),
             ("G", "Next game starts here"),
             ("T", "Set stage"),
             ("Ctrl+S", "Save"),
-            ("Ctrl+Z", "Undo"),
+            ("Ctrl+Z", "Undo last change"),
             ("Q", "Quit"),
         ]
 
@@ -866,9 +850,13 @@ class SceneLabeler(QMainWindow):
 
         self.video_labels: VideoLabels | None = None
         self.current_game_index = 0
+        # segment_start with current_class set: an open continuous label.
+        # segment_start with current_class None: a mark set with S.
         self.segment_start: float | None = None
-        self.current_class: SceneState | None = None  # For continuous labeling
-        self.undo_stack: list[tuple] = []  # (game_index, label_index)
+        self.current_class: SceneState | None = None
+        self.change_target: int | None = None  # C pressed: the next class key relabels this row
+        # Each entry: (game index, copy of every game) from before a change
+        self.undo_stack: list[tuple[int, list[GameLabels]]] = []
 
         self._setup_ui()
         self._setup_shortcuts()
@@ -898,6 +886,7 @@ class SceneLabeler(QMainWindow):
 
         self.label_panel = LabelPanel()
         self.label_panel.label_selected.connect(self.player.seek_time)
+        self.label_panel.selection_changed.connect(self._on_selection_changed)
         right_panel.addWidget(self.label_panel)
 
         self.dist_panel = ClassDistributionPanel()
@@ -928,6 +917,15 @@ class SceneLabeler(QMainWindow):
             QShortcut(getattr(Qt, f"Key_{i}"), self, lambda x=i: self._assign_class(x))
         QShortcut(Qt.Key_R, self, lambda: self._assign_class(10))  # R = respawning
 
+        # Editing existing segments
+        QShortcut(Qt.Key_C, self, self._start_change_class)
+        QShortcut(Qt.Key_K, self, self._split_at_playhead)
+        QShortcut(Qt.Key_BracketLeft, self, lambda: self._move_edge("start"))
+        QShortcut(Qt.Key_BracketRight, self, lambda: self._move_edge("end"))
+        QShortcut(Qt.Key_Delete, self, self._delete_target)
+        QShortcut(Qt.Key_Backspace, self, self._delete_target)
+        QShortcut(Qt.Key_Escape, self, self._cancel)
+
         # Stage and game
         QShortcut(Qt.Key_T, self, self._set_stage)
         QShortcut(Qt.Key_G, self, self._mark_game_boundary)
@@ -954,6 +952,7 @@ class SceneLabeler(QMainWindow):
                 data = json.load(f)
                 self.video_labels = VideoLabels.from_dict(data)
                 self.statusBar().showMessage(f"Loaded {len(self._current_game.labels)} labels")
+            self._warn_overlaps()
         else:
             # Create new labels
             video_id = self.video_path.stem
@@ -981,12 +980,34 @@ class SceneLabeler(QMainWindow):
         """Get current game."""
         return self.video_labels.games[self.current_game_index]
 
-    def _update_ui(self):
-        """Update all UI elements."""
+    def _update_ui(self, select_at: float | None = None):
+        """Update all UI elements; select the segment covering select_at, if given."""
         game = self._current_game
         self.label_panel.update_game_info(game)
         self.label_panel.update_labels(game.labels)
         self.dist_panel.update_distribution(game.labels)
+        if select_at is not None:
+            try:
+                self.label_panel.select_row(segment_at(game.labels, select_at))
+            except EditError:
+                pass
+
+    def _warn_overlaps(self):
+        """Say where a loaded file has segments covering the same time. Nothing is changed."""
+        found = [
+            (game.game_number, a, b)
+            for game in self.video_labels.games
+            for a, b in overlaps(game.labels)
+        ]
+        if not found:
+            return
+        for game_number, a, b in found:
+            print(f"Overlap in game {game_number}: {a.describe()} and {b.describe()}")
+        game_number, a, b = found[0]
+        self.statusBar().showMessage(
+            f"Warning: {len(found)} overlapping segment pair(s), first in game {game_number} at "
+            f"{b.start_sec:.3f}s. Overwrite the overlap to fix it (details in the terminal)."
+        )
 
     def _on_frame_changed(self, frame: int, timestamp: float):
         """Handle frame change - auto-switch to correct game based on timestamp."""
@@ -1001,6 +1022,7 @@ class SceneLabeler(QMainWindow):
             if game.start_sec <= timestamp < game_end:
                 if i != self.current_game_index:
                     self.current_game_index = i
+                    self.change_target = None  # it named a row of the other game
                     self._update_ui()
                     self.statusBar().showMessage(
                         f"Switched to Game {game.game_number} ({game.stage})"
@@ -1021,136 +1043,246 @@ class SceneLabeler(QMainWindow):
         else:
             self.player.step_forward()
 
+    # ------------------------------------------------------------------
+    # Editing: every change goes through _apply, which records undo
+    # ------------------------------------------------------------------
+
+    def _now(self) -> float:
+        """The playhead's time, as it is stored."""
+        return frame_time(self.player.current_frame, self.player.fps)
+
+    def _snapshot(self):
+        """Remember the games as they are now, for Ctrl+Z."""
+        self.undo_stack.append((self.current_game_index, copy.deepcopy(self.video_labels.games)))
+
+    def _apply(
+        self,
+        edit: Callable[[list[SegmentLabel]], list[SegmentLabel]],
+        message: str,
+        select_at: float | None = None,
+    ) -> bool:
+        """Run an edit on the current game's segments. A refused edit changes nothing."""
+        game = self._current_game
+        try:
+            new_labels = edit(game.labels)
+        except EditError as e:
+            self.statusBar().showMessage(str(e))
+            return False
+        self._snapshot()
+        game.labels = new_labels
+        self._update_ui(select_at=select_at)
+        self.statusBar().showMessage(message)
+        return True
+
+    def _label_open(self) -> bool:
+        """True (and says so) if a continuous label is open, which blocks other edits."""
+        if self.current_class is None:
+            return False
+        self.statusBar().showMessage(
+            f"A {self.current_class.value} label is open from {self.segment_start:.3f}s: "
+            "E closes it here, Esc drops it."
+        )
+        return True
+
+    def _target(self) -> int | None:
+        """The row selected in the table, else the segment under the playhead."""
+        labels = self._current_game.labels
+        row = self.label_panel.selected_index()
+        if row is not None and row < len(labels):
+            return row
+        try:
+            row = segment_at(labels, self._now())
+        except EditError as e:
+            self.statusBar().showMessage(str(e))
+            return None
+        if row is None:
+            self.statusBar().showMessage("No segment selected and none under the playhead")
+        return row
+
+    def _clear_pending(self):
+        """Drop an open label, a mark and a pending class change."""
+        self.segment_start = None
+        self.current_class = None
+        self.change_target = None
+        self.label_panel.clear_segment_start()
+
+    def _on_selection_changed(self):
+        row = self.label_panel.selected_index()
+        labels = self._current_game.labels
+        if row is not None and row < len(labels):
+            self.statusBar().showMessage(
+                f"Selected {labels[row].describe()}: C, [, ], Delete act on it. Esc clears."
+            )
+
     def _mark_segment_start(self):
-        """Mark the start of a segment (or reset current label start)."""
-        # If we're in continuous mode with an active label, finalize it first
+        """S: set a mark at the playhead. The next class key labels mark to playhead."""
         if self.current_class is not None:
             self._finalize_current_label()
-
-        self.segment_start = self.player.get_current_time()
+        self.change_target = None
+        self.segment_start = self._now()
         self.current_class = None
-        self.label_panel.update_segment_start(self.segment_start)
+        self.label_panel.update_segment_start(self.segment_start, mark=True)
         self.statusBar().showMessage(
-            f"Segment start: {self.segment_start:.1f}s. Press 0-9 or R to assign class."
+            f"Mark at {self.segment_start:.3f}s. Move to the other end and press 0-9 or R "
+            "to label the stretch between. Esc cancels."
         )
 
     def _mark_segment_end(self):
-        """Finalize the current label at current position."""
+        """E: close the open continuous label at the playhead."""
         if self.current_class is not None:
-            # In continuous mode - finalize the current label
-            if self._finalize_current_label():
-                return
-
-        if self.segment_start is None:
-            self.statusBar().showMessage("Press S first to mark segment start, or press 0-9 or R to start labeling.")
-            return
-
-        # Show where end would be
-        end_time = self.player.get_current_time()
-        self.statusBar().showMessage(
-            f"Segment: {self.segment_start:.1f}s - {end_time:.1f}s. Press 0-9 or R to assign class."
-        )
+            self._finalize_current_label()
+        elif self.segment_start is not None:
+            self.statusBar().showMessage(
+                f"Mark at {self.segment_start:.3f}s: press 0-9 or R to label from it to here."
+            )
+        else:
+            self.statusBar().showMessage("No open label. Press 0-9 or R to start one, or S to set a mark.")
 
     def _assign_class(self, class_num: int):
-        """Assign a class to the current segment.
+        """A class key. What it does depends on what is pending:
 
-        Continuous labeling mode:
-        - First press: Sets the start time and class (label extends as you navigate)
-        - Subsequent press of SAME key: Does nothing (you're still in that class)
-        - Press of DIFFERENT key: Ends current label at current time, starts new one
+        - after C: changes the chosen segment's class;
+        - after S: labels the stretch from the mark to the playhead, replacing
+          what was there;
+        - otherwise, continuous mode: closes the open label here (replacing what
+          it covers) and starts a new one with this class.
         """
         if class_num not in SCENE_LABELS:
             return
-
         new_class = SCENE_LABELS[class_num]
-        current_time = self.player.get_current_time()
-        game = self._current_game
 
-        # If we're already labeling this class, do nothing
-        if self.current_class == new_class and self.segment_start is not None:
-            self.statusBar().showMessage(
-                f"Still labeling: {new_class.value} (started at {self.segment_start:.1f}s)"
+        if self.change_target is not None:
+            row, self.change_target = self.change_target, None
+            old = self._current_game.labels[row]
+            self._apply(
+                lambda labels: set_class(labels, row, new_class.value),
+                f"Changed {old.describe()} to {new_class.value}",
+                select_at=old.start_sec,
             )
             return
 
-        # If we have an active label, close it first
-        if self.segment_start is not None and self.current_class is not None:
-            # Create label for the previous segment
-            start = round(self.segment_start, 1)
-            end = round(current_time, 1)
+        now = self._now()
+        if self.segment_start is not None and self.current_class is None:
+            # The mark is used up even if the edit is refused: a mark left behind
+            # would make a later class key overwrite everything back to it.
+            mark = self.segment_start
+            self._clear_pending()
+            start, end = min(mark, now), max(mark, now)
+            self._apply(
+                lambda labels: overwrite(labels, start, end, new_class.value),
+                f"Labelled {start:.3f}-{end:.3f}s as {new_class.value}",
+                select_at=start,
+            )
+            return
 
-            # Only create label if it has positive duration
-            if end > start:
-                label = SegmentLabel(
-                    start_sec=start,
-                    end_sec=end,
-                    scene_class=self.current_class.value,
-                )
-                game.labels.append(label)
-                game.labels.sort(key=lambda x: x.start_sec)
+        if self.current_class == new_class:
+            self.statusBar().showMessage(
+                f"Still labeling: {new_class.value} (started at {self.segment_start:.3f}s)"
+            )
+            return
+        if self.current_class is not None:
+            self._close_open_label(now)
 
-                # Track for undo
-                label_index = game.labels.index(label)
-                self.undo_stack.append((self.current_game_index, label_index))
-
-                self.statusBar().showMessage(
-                    f"Closed: {start:.1f}s - {end:.1f}s = {self.current_class.value}"
-                )
-
-        # Start new label at current time with new class
-        self.segment_start = current_time
+        self.segment_start = now
         self.current_class = new_class
         self.label_panel.update_segment_start(self.segment_start)
         self.label_panel.update_segment_class(new_class)
-
-        # Update UI
-        self._update_ui()
         self.statusBar().showMessage(
-            f"Labeling: {new_class.value} (from {current_time:.1f}s - press different key to end)"
+            f"Labeling: {new_class.value} (from {now:.3f}s - press a different key to end)"
         )
 
-    def _finalize_current_label(self):
-        """Finalize the current label at the current time position."""
+    def _close_open_label(self, end: float) -> bool:
+        """Write the open continuous label as segment_start to end, replacing what it covers."""
+        start, cls = self.segment_start, self.current_class.value
+        return self._apply(
+            lambda labels: overwrite(labels, start, end, cls),
+            f"Closed: {min(start, end):.3f}-{max(start, end):.3f}s = {cls}",
+        )
+
+    def _finalize_current_label(self) -> bool:
+        """Close the open label at the playhead and leave continuous mode."""
         if self.segment_start is None or self.current_class is None:
             return False
+        closed = self._close_open_label(self._now())
+        self._clear_pending()
+        return closed
 
-        current_time = self.player.get_current_time()
-        game = self._current_game
+    def _start_change_class(self):
+        """C: the next class key changes the target segment's class."""
+        if self._label_open():
+            return
+        row = self._target()
+        if row is None:
+            return
+        self.segment_start = None
+        self.change_target = row
+        self.label_panel.select_row(row)
+        self.statusBar().showMessage(
+            f"Change {self._current_game.labels[row].describe()} to: press 0-9 or R (Esc cancels)"
+        )
 
-        start = round(self.segment_start, 1)
-        end = round(current_time, 1)
+    def _split_at_playhead(self):
+        """K: cut the segment under the playhead in two at the playhead."""
+        if self._label_open():
+            return
+        now = self._now()
+        try:
+            row = segment_at(self._current_game.labels, now)
+        except EditError as e:
+            self.statusBar().showMessage(str(e))
+            return
+        if row is None:
+            self.statusBar().showMessage(f"No segment under the playhead at {now:.3f}s")
+            return
+        old = self._current_game.labels[row]
+        self._apply(
+            lambda labels: split(labels, row, now),
+            f"Cut {old.describe()} at {now:.3f}s",
+            select_at=now,
+        )
 
-        # Only create label if it has positive duration
-        if end > start:
-            label = SegmentLabel(
-                start_sec=start,
-                end_sec=end,
-                scene_class=self.current_class.value,
-            )
-            game.labels.append(label)
-            game.labels.sort(key=lambda x: x.start_sec)
+    def _move_edge(self, edge: str):
+        """[ or ]: move the target segment's start or end to the playhead."""
+        if self._label_open():
+            return
+        row = self._target()
+        if row is None:
+            return
+        now = self._now()
+        old = self._current_game.labels[row]
+        self._apply(
+            lambda labels: move_edge(labels, row, edge, now),
+            f"Moved the {edge} of {old.describe()} to {now:.3f}s",
+            select_at=now if edge == "start" else old.start_sec,
+        )
 
-            # Track for undo
-            label_index = game.labels.index(label)
-            self.undo_stack.append((self.current_game_index, label_index))
+    def _delete_target(self):
+        """Delete: remove the target segment, leaving its time unlabelled."""
+        if self._label_open():
+            return
+        row = self._target()
+        if row is None:
+            return
+        old = self._current_game.labels[row]
+        self._apply(lambda labels: delete(labels, row), f"Deleted {old.describe()}")
 
-            self.statusBar().showMessage(
-                f"Finalized: {start:.1f}s - {end:.1f}s = {self.current_class.value}"
-            )
-
-            # Reset
-            self.segment_start = None
-            self.current_class = None
-            self.label_panel.clear_segment_start()
-            self._update_ui()
-            return True
-
-        return False
+    def _cancel(self):
+        """Esc: drop the open label, mark or pending change, and clear the selection."""
+        what = (
+            f"open {self.current_class.value} label" if self.current_class is not None
+            else "mark" if self.segment_start is not None
+            else "class change" if self.change_target is not None
+            else None
+        )
+        self._clear_pending()
+        self.label_panel.select_row(None)
+        self.statusBar().showMessage(f"Cancelled the {what}" if what else "Selection cleared")
 
     def _set_stage(self):
         """Open stage selection dialog."""
         dialog = StageDialog(self._current_game.stage, self)
         if dialog.exec_() == QDialog.Accepted:
+            self._snapshot()
             self._current_game.stage = dialog.get_stage()
             self._update_ui()
             self.statusBar().showMessage(f"Stage set to: {dialog.get_stage()}")
@@ -1166,7 +1298,8 @@ class SceneLabeler(QMainWindow):
         if self.current_class is not None:
             self._finalize_current_label()
 
-        current_time = self.player.get_current_time()
+        current_time = self._now()
+        self._snapshot()
 
         # End current game
         self._current_game.end_sec = current_time
@@ -1182,7 +1315,7 @@ class SceneLabeler(QMainWindow):
 
         self._update_ui()
         self.statusBar().showMessage(
-            f"New game started at {current_time:.1f}s. Press T to set stage."
+            f"New game started at {current_time:.3f}s. Press T to set stage."
         )
 
     def _save_labels(self):
@@ -1208,18 +1341,14 @@ class SceneLabeler(QMainWindow):
         self.statusBar().showMessage(f"Saved to {self.labels_path}")
 
     def _undo_last(self):
-        """Undo last label."""
+        """Ctrl+Z: put the games back as they were before the last change."""
         if not self.undo_stack:
             self.statusBar().showMessage("Nothing to undo")
             return
-
-        game_index, label_index = self.undo_stack.pop()
-        game = self.video_labels.games[game_index]
-
-        if 0 <= label_index < len(game.labels):
-            removed = game.labels.pop(label_index)
-            self._update_ui()
-            self.statusBar().showMessage(f"Undone: {removed.scene_class}")
+        self.current_game_index, self.video_labels.games = self.undo_stack.pop()
+        self._clear_pending()
+        self._update_ui()
+        self.statusBar().showMessage(f"Undone ({len(self.undo_stack)} more change(s) can be undone)")
 
     def closeEvent(self, event):  # noqa: N802 - Qt override name
         """Handle window close."""

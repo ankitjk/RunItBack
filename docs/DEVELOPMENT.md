@@ -2,11 +2,46 @@
 
 The changelog of RunItBack: what changed in each session, why, and what was measured. Entries are history and are not rewritten; later corrections are added as dated notes. How the pipeline works *now* is in [ARCHITECTURE.md](ARCHITECTURE.md), and open bugs are in [ISSUES.md](ISSUES.md).
 
-**Last Updated:** November 26, 2026
+**Last Updated:** November 27, 2026
 
 ---
 
 ## Changelog
+
+### November 27, 2026 - Label Editing in the Label Tool (ISSUE-024, ISSUE-025)
+
+**Session Goal:** Step 2 of the labelling loop - edit existing labels in `scene_labeler.py`, so the GO!, GAME! and finishing-blow relabel (step 3) and draft review (step 6) can be done in the tool rather than by hand in JSON.
+
+**Problem:**
+- The tool could only add labels. Ctrl+Z removed labels added in the current session; anything older needed hand-editing of the JSON.
+- ISSUE-024: S set a mark, but the next class key started the label at the playhead, not at the mark (`_assign_class` reset `segment_start` to the current time). The status bar said the opposite.
+- ISSUE-025: labelling time that was already labelled appended a second label; nothing checked for overlaps. `XUkRx6CpL04` has one: game 1, `one_offstage` 80.7-84.6s and `both_offstage` 84.5-86.2s. The 0.15s edge padding in extraction means no training frame came from those 0.1s, so it is harmless and was left alone (a ground-truth edit needs the owner's approval).
+- New segment times were rounded to 0.1s, up to 6 frames off at 60fps.
+- Saving wrote only start, end and class, so a runitback-labeler draft opened and saved would have lost `source`, `needs_review` and the model's guesses.
+
+**Changes:**
+- `tools/label_segments.py` (new) - the label-file classes, moved out of `scene_labeler.py`, and the edits as functions with no Qt dependency: `overwrite`, `split`, `set_class`, `move_edge`, `delete`, plus `segment_at` and `overlaps`. Each returns a new segment list or raises `EditError` with the reason, so a refused edit changes nothing. No edit leaves an overlap. Fields the tool does not use are kept in `extra` on the video, each game and each segment, written back on save, and copied to both pieces when a segment is cut.
+- `tools/scene_labeler.py`:
+  - **S then a class key** labels from the mark to the playhead, replacing what was there - the main relabelling action (ISSUE-024). The class key uses up the mark even when the edit is refused. A first version left the mark set after a refusal, and the next class key, meant to start a continuous label 20s later, overwrote everything back to the old mark; the off-screen check below caught it.
+  - **Continuous labelling** closes each label with `overwrite`, so labelling over labels replaces them (ISSUE-025).
+  - New keys: C (change class), K (cut at the playhead), [ and ] (move start or end to the playhead; the neighbour sharing the edge follows), Delete/Backspace, Esc (cancel). They act on the table's selected row, or else the segment under the playhead; K always uses the segment under the playhead. Edits are refused while a continuous label is open.
+  - Times are stored per frame to 0.1 ms (`frame_time`), and seeking rounds back to that frame. The player shows the frame number; the table shows 3 decimals and its cells are no longer editable text.
+  - Ctrl+Z restores a snapshot from before each change, so it undoes edits, game boundaries and stage changes, in any game.
+  - Loading reports overlapping segments in the status bar and the terminal, without changing them.
+- `tests/test_label_segments.py` (new, 21 tests) - each edit, refusals, no overlaps after a sequence of overwrites, fields kept on the pieces, frame times mapping back to their frame at 60/59.94/30/29.97fps, and every real label file loading and saving unchanged.
+- `tests/test_scene_labeler_keys.py` (new, 4 tests) - drives the window with real key presses on a generated 4-second video: the mark (ISSUE-024), a refused mark edit not leaving the mark behind, continuous labelling replacing labels (ISSUE-025), and cut, change, move, delete, then Ctrl+Z back to the file exactly. Skipped where PyQt5 is not installed.
+- `docs/ARCHITECTURE.md`, `CLAUDE.md` - the label tool's editing rules and the new module.
+
+**Results:**
+- Fast suite: 109 passed, 6 xfailed (84 passed before; 25 new).
+- Off-screen run of the real tool on a copy of `XUkRx6CpL04.json` with the cached video (60fps): mark relabel, continuous relabel, cut, change, edge move, Delete with the table focused, and refusals all behaved as above, with no new overlaps. Ctrl+Z back to the start reproduced the file exactly, and the ground-truth file's checksum was unchanged.
+- Not yet used by a person on a real relabel; that is step 3.
+
+**Left Open:**
+- Changing a draft segment's class does not clear its `needs_review`; marking a segment reviewed belongs to the review screen (step 6).
+- `extract_labeled_frames.py` turns a time into a frame with `int(t * fps)`, which can land one frame early on a time stored to 0.1 ms. It only matters for segments under 0.3s, where one middle frame is taken; not changed here.
+
+---
 
 ### November 26, 2026 - One-Command Model Build; 11-Class Baseline on Corrected Labels
 
@@ -945,11 +980,13 @@ real game into two splits, so bounds are confirmed like any other label.
 means relabelling every labelled video, so all three new classes go in at once
 (step 3), before the labeller drafts video 2.
 
-1. **Train-and-export command.** One command that trains, evaluates on held-out
+1. **Train-and-export command.** *(Done 2026-11-26: `tools/build_scene_model.py`.)*
+   One command that trains, evaluates on held-out
    data, and exports ONNX, with a hold-out choice of a game (now) or a whole
    video (once there are two). Its first run is the baseline on the corrected
    11-class labels.
-2. **Label editing in `scene_labeler.py`.**
+2. **Label editing in `scene_labeler.py`.** *(Done 2026-11-27, plus overwrite
+   from a mark to the playhead; see the changelog.)*
    - Select a segment and change its class.
    - Split a segment at the playhead, move a segment's edges, delete a segment;
      segments never overlap.
