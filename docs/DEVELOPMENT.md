@@ -41,7 +41,7 @@ The changelog of RunItBack: what changed in each session, why, and what was meas
 - `tools/scene_labeler.py` - `--gold`: labels go to the gold folder, the file gets `"role": "gold"`, and the title starts `[GOLD: test only]`. A file that says gold opens as gold even without the flag.
 - `tools/extract_labeled_frames.py` - a file marked gold is an error, nothing is extracted from it, and earlier frames are kept. This also catches a gold file copied into `raw_labels/`.
 - Tests (3): the folder rule both ways and the role surviving a round trip; extraction refusing a gold file; the tool saving and reopening a gold video as gold.
-- Owner's candidate gold videos, checked against YouTube's metadata: `g5T1i-l9rrY` (Minnesota Smash Ultimate, 1080p, 9:21) and `QgVHJs1CWU0` (Wisconsin Smash, 720p, 13:50). The second is from the same channel as the training video `XUkRx6CpL04`, so it probably shares its overlay and its score would flatter the model; raised with the owner. Neither is a stock-loss benchmark set.
+- Owner's candidate gold videos, checked against YouTube's metadata: `g5T1i-l9rrY` (Minnesota Smash Ultimate, 1080p, 9:21) and `QgVHJs1CWU0` (Wisconsin Smash, 720p, 13:50). The second is from the same channel as the training video `XUkRx6CpL04`; the owner checked that its overlay is different, so both are kept. Neither is a stock-loss benchmark set. Game 1 of each is the game to hand-label, chosen by rule before looking, so an easy game is not picked by accident.
 
 **Results:** Fast suite: 135 passed, 6 xfailed. Nothing trained.
 
@@ -1129,6 +1129,9 @@ game 3, 41% of game time was accepted that way and 22% of it was wrong). So:
    different stages and characters, at 1080p, ideally including a finishing
    blow and a TIME! ending. One of the six stock-loss benchmark sets would also
    let `analyze` be checked on it.
+   - Chosen 2026-11-27: `g5T1i-l9rrY` (Minnesota Smash Ultimate) and
+     `QgVHJs1CWU0` (Wisconsin Smash, the training video's channel, but a
+     different overlay). Game 1 of each is the gold game.
    - The owner labels one game of each by hand with all 14 classes, blind:
      before the labeller runs on it. This can start as soon as the P/X/F keys
      exist (step 3), before the retrain. The videos' other games are not
