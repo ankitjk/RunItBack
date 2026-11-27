@@ -8,6 +8,22 @@ The changelog of RunItBack: what changed in each session, why, and what was meas
 
 ## Changelog
 
+### November 27, 2026 - Plan: a Hand-Labelled Gold Set for Testing
+
+**Problem:**
+- The plan had the labeller draft video 2, the owner review it, and the model trained on video 1 be tested on it. Review mode visits only `needs_review` segments; segments the model and the LLM agree on are accepted unseen. On game 3 that was 41% of game time, 22% of it wrong. Those labels would be the model's own predictions, so the test would mark the model right on its own mistakes (for example agreed `one_on_ledge`, wrong 62% of the time on game 3) and report it as better than it is. The same holds for scoring the labeller against a reviewed version of its own draft.
+- A first fix (hand-label one game of video 2 blind, draft the rest for training) still fails once a model trains on video 2's other games: the blind game is then from a seen broadcast, like the game-3 figure, not an unseen video.
+
+**Changes:**
+- `docs/DEVELOPMENT.md`, labelling-loop plan (owner's decisions): testing and training use different videos. **Gold videos** have one game labelled by hand, blind, and are never trained on; **training videos** are drafted and reviewed. `XUkRx6CpL04` stays a training video: its game 3 is an unseen game but not an unseen video, and the 14-class model will train on it.
+- The plan is reordered to get honest numbers before building more: after the new classes (step 3) come **two gold videos** (step 4: best-of-3 sets, one hand-labelled game each, a `role` field that keeps them out of training) and the **first unseen-video results** on them (step 5: the scene model's cross-video accuracy; the labeller's threshold chosen on one gold game and checked on the other, a paid run needing approval). Those numbers decide the threshold (the owner asked about 0.8: on today's model almost no segment reaches it, so it would change little, and the larger error source is the agree-and-accept rule), the agree-and-accept rule, and whether game bounds, the skeleton and the review screen (now steps 6-8) are worth building. Training videos (step 9) are best-of-5 sets, reviewed in full until the gold numbers justify spot checks.
+- The runitback-labeler session was told its side (scoring against gold games, gold drafts never imported, spot-checking accepted segments). Settled with it, and written into steps 4, 7 and 8: the skeleton carries `role`, so the labeller can refuse to draft a gold game before its hand labels exist; a model is scored on a gold game only if the video is also absent from its `run.json` `split.train_games`; spot checks are a separate `spot_check` flag whose verdict the review screen records explicitly (`confirmed` / `corrected`, where `corrected` means the class was wrong), and extraction refuses a game with an unanswered one.
+- Two gold videos from the start settle how the labeller's threshold is measured. With one, it could only be chosen and checked on the same game (as on game 3 now, which flatters it), or chosen on game 3 with a separate model that never trained on it.
+
+**Results:** Plan only; nothing built or measured.
+
+---
+
 ### November 27, 2026 - Label Editing in the Label Tool (ISSUE-024, ISSUE-025)
 
 **Session Goal:** Step 2 of the labelling loop - edit existing labels in `scene_labeler.py`, so the GO!, GAME! and finishing-blow relabel (step 3) and draft review (step 6) can be done in the tool rather than by hand in JSON.
@@ -974,7 +990,7 @@ Example for "doug todd (Mario) vs Spencer (Ness)":
 7. **New scene classes** - `pre_game`, `game_end` and `finishing_blow` were defined on 2026-11-26 (see `docs/SCENE_CLASSES.md`). They are planned in the labelling loop, step 3.
 8. **Labelling loop with `runitback-labeler`** - see below.
 
-### Labelling loop (planned order, revised 2026-11-26)
+### Labelling loop (planned order, revised 2026-11-27)
 
 Goal: label new videos by approving machine drafts instead of labelling from
 scratch. `runitback-labeler` (a separate repo) writes draft labels. A person
@@ -986,9 +1002,25 @@ depend on game bounds (`extract_labeled_frames.py` uses the game only to tag
 frames for the split). A boundary that cuts through gameplay, however, leaks one
 real game into two splits, so bounds are confirmed like any other label.
 
-**The class list is settled before video 2 is labelled.** Each change to it
-means relabelling every labelled video, so all three new classes go in at once
-(step 3), before the labeller drafts video 2.
+**The class list is settled before any new video is labelled.** Each change to
+it means relabelling every labelled video, so all three new classes go in at
+once (step 3), before the gold videos are labelled.
+
+**Testing and training use different labels (decided 2026-11-27).** A label the
+model helped make cannot be used to score that model, or any later version of
+it: in a draft, segments the model and the LLM agree on are accepted without a
+person looking, so the model would be marked right on its own mistakes (on
+game 3, 41% of game time was accepted that way and 22% of it was wrong). So:
+- **Gold videos** test. One game of each is labelled by hand, blind (before any
+  draft of it exists). No game of a gold video is ever trained on, so its score
+  is a true unseen-video score. The set starts with two gold videos (step 4)
+  and then grows slowly: a new one when a new kind of broadcast appears.
+- **Training videos** are drafted by the labeller and reviewed. Unreviewed
+  errors there teach the model its own mistakes, so each draft is reviewed in
+  full or spot-checked (step 9), and the gold set shows whether training on
+  drafts actually helps.
+- `XUkRx6CpL04` (hand-labelled before any draft) stays a training video; its
+  game 3 remains the labeller's within-video measurement.
 
 1. **Train-and-export command.** *(Done 2026-11-26: `tools/build_scene_model.py`.)*
    One command that trains, evaluates on held-out
@@ -1027,7 +1059,43 @@ means relabelling every labelled video, so all three new classes go in at once
    - `finishing_blow` shows at most a few times per set (final stock only), so
      it may stay under the 10-frame training minimum until more videos are
      labelled. Say so in the results rather than inflating it.
-4. **Game bounds.**
+4. **Two gold videos, before any other video is labelled.** The owner
+   chooses two best-of-3 sets (fewer games set aside than a best of 5), from
+   different channels or overlays than `XUkRx6CpL04` and from each other, with
+   different stages and characters, at 1080p, ideally including a finishing
+   blow and a TIME! ending. One of the six stock-loss benchmark sets would also
+   let `analyze` be checked on it.
+   - The owner labels one game of each by hand with all 14 classes, blind:
+     before the labeller runs on it. This can start as soon as the P/X/F keys
+     exist (step 3), before the retrain. The videos' other games are not
+     labelled and never trained on; they may be hand-labelled later as more
+     test data.
+   - Label files get a top-level `role`: `gold` or `training` (none =
+     `training`). `build_scene_model.py` uses gold videos only as test data and
+     refuses to train on them; `extract_labeled_frames.py` keeps them out of
+     train and validation.
+   - A model may be scored on a gold game only if the label file says `gold`
+     **and** its `run.json` shows the video in none of `split.train_games`
+     (which already lists every game used for training and validation). The
+     labeller checks both, not the role alone.
+   - Two gold games from the start replace the earlier options for the
+     labeller's threshold (choose and check on one gold game, or keep a
+     separate model trained on games 1-2): with two, the threshold is chosen
+     on one and checked on the other.
+5. **First unseen-video results**, on the two gold games. Nothing else needs
+   building first: the labeller reads game bounds from a hand-label file.
+   - **Scene model** trained on all of `XUkRx6CpL04`: accuracy and per-class
+     recall and precision on each gold game. The first cross-video figures.
+   - **Labeller:** drafts both gold games (measurement only, never imported).
+     Its threshold is chosen on gold game A and checked on gold game B,
+     reporting B's accepted time and how much of it is wrong. This is a paid
+     LLM run (about 200 calls a game) and waits for the owner's approval.
+   - **Then decide, from these numbers:** the threshold for the new model
+     (including whether to set it high, such as 0.8); whether "model and LLM
+     agree -> accept" is safe enough (it is the larger error source: 22% of
+     agreed time wrong on game 3); and whether drafts save enough labelling
+     time to justify steps 6-8.
+6. **Game bounds.**
    - Split the GO!/GAME! part of `detect_games` into a shared function without
      character detection.
    - Fix ISSUE-022 (character select detected as GO!) and ISSUE-023 (a missed
@@ -1039,11 +1107,14 @@ means relabelling every labelled video, so all three new classes go in at once
      unseen video checked so far exposed ISSUE-022.
    - Once trained, `pre_game` and `game_end` are a second, learned signal for
      game bounds alongside the colour checks.
-5. **Skeleton tool** - `tools/make_label_skeleton.py` writes
+7. **Skeleton tool** - `tools/make_label_skeleton.py` writes
    `data/scene_classifier/skeletons/<video_id>.json` (gitignored). It is the
    label-file format with empty `labels`, plus these fields:
    - Top level: `format` (1), `duration_sec`, `detection` (method, counts,
-     warnings).
+     warnings), and `role` (`gold` or `training`, set by the owner when the
+     video is chosen; see step 4). The labeller refuses to draft a game of a
+     gold video until a hand-label file has that game, which keeps gold
+     labelling blind in code, not only by habit.
    - Per game: `status` (`skeleton` -> `draft` -> `labelled`),
      `bounds_confirmed` (false), `ends_with_game_screen` (proposed: true when
      GAME! was detected), `go_sec` and `game_sec` (approximate: GAME!
@@ -1055,7 +1126,7 @@ means relabelling every labelled video, so all three new classes go in at once
      saying so, never dropped.
    - A file or game with no `status` is a finished legacy label (`labelled`,
      bounds confirmed).
-6. **Review screen and extraction check.**
+8. **Review screen and extraction check.**
    - Import a draft for one game into the video's label file.
    - **Bounds confirmation:** per game, four thumbnails (start, GO!, GAME!,
      end), with adjusting by key. The person also confirms whether the game
@@ -1068,18 +1139,34 @@ means relabelling every labelled video, so all three new classes go in at once
      game's `produced_by` (scene-model hash and folder name, LLM model and
      prompt id). Accepting or changing sets `source=human` and clears
      `needs_review`.
+   - **Spot checks:** the labeller marks a seeded random sample of its
+     auto-accepted segments `spot_check: true` (separate from `needs_review`;
+     seed and rate recorded in `produced_by`). N visits them too. The person's
+     verdict is always recorded, `spot_check: "confirmed"` or `"corrected"`,
+     because a segment agreed with would otherwise look the same as one never
+     looked at, and no error rate could be computed. `"corrected"` means the
+     class was wrong; a boundary-only fix with the class right is
+     `"confirmed"` (agreed with runitback-labeler). It is not inferred from
+     `source`: an edge move also makes a segment `human`. The rate is reported
+     by time and by count. It is not blind (the person sees the proposal), so
+     it reads a little low; the gold set is the unbiased number.
    - A game is saved as `labelled` only when its bounds are confirmed and no
      segment needs review.
    - **Extraction** (`extract_labeled_frames.py`): games that are not
      `labelled` are skipped and listed in the output, so a finished game can be
      used while others are still drafts. A `labelled` game is refused
-     (non-zero exit, naming file and game) if any segment still needs review,
+     (non-zero exit, naming file and game) if any segment still needs review or has an unanswered spot check,
      if its boundary falls outside a `non_gameplay` segment, or if
      `ends_with_game_screen` is true and it has no `game_end` segment before
      its boundary. The rule keys on the person's confirmation, not on
      `end_source`, which is only what detection found. Tolerance is 0.05s.
-7. **Labeller drafts video 2** against the skeleton, with all 14 classes
-   (`runitback-labeler`).
-8. **Review video 2**, then train on video 1 and test on all of video 2: the
-   first cross-video accuracy figure. Video 2 stays the held-out test set.
-9. **Generalise** the label tool and training beyond this class set and project.
+9. **Training videos:** best-of-5 sets (most training data per video), drafted
+   by the labeller against their skeletons with all 14 classes, and reviewed
+   by the owner in `scene_labeler.py`.
+   - Every segment is reviewed, not only `needs_review` ones (the strips make a
+     full pass quick), until the gold numbers show the accepted labels are
+     reliably right. Only then drop to spot checks: a random sample of accepted
+     segments, so each video's accepted-error rate is still known.
+   - After each retrain, score the gold set: a model trained on drafts must
+     beat the one before it there, or the drafts' errors are winning.
+10. **Generalise** the label tool and training beyond this class set and project.
