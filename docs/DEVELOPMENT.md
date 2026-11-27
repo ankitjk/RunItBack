@@ -46,6 +46,9 @@ The changelog of RunItBack: what changed in each session, why, and what was meas
 - Changing a draft segment's class does not clear its `needs_review`; marking a segment reviewed belongs to the review screen (step 6).
 - `extract_labeled_frames.py` turns a time into a frame with `int(t * fps)`, which can land one frame early on a time stored to 0.1 ms. It only matters for segments under 0.3s, where one middle frame is taken; not changed here.
 
+**Minor:**
+- `data/scene_classifier/raw_labels/XUkRx6CpL04.json` - the owner relabelled the game-1 overlap in the label tool, choosing `both_offstage` for 84.5-84.6s. Net change: `one_offstage` 80.7-84.6s now ends at 84.5s; the two segments that the first overwrite left (84.5-84.6 and 84.6-86.2) were joined back into `both_offstage` 84.5-86.2s with the owner's approval. No overlaps remain in the file. Not yet retrained on.
+
 ---
 
 ### November 26, 2026 - One-Command Model Build; 11-Class Baseline on Corrected Labels
