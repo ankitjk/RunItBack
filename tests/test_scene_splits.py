@@ -238,6 +238,33 @@ def test_unopenable_video_does_not_delete_existing_frames(tmp_path):
     assert stats.errors and len(list(frames.rglob("*.jpg"))) == before
 
 
+def test_the_new_classes_are_extracted_and_the_short_ones_sampled_densely(tmp_path):
+    video = tmp_path / "vid.mp4"
+    _write_test_video(video, seconds=6.0)
+    stats = elf.ExtractionStats()
+    segments = [(0.0, 2.0, "pre_game"), (2.0, 4.0, "game_end"), (4.0, 6.0, "finishing_blow")]
+    elf.extract_frames_from_video(video, _labels("vidA", segments), tmp_path / "frames", stats)
+    assert stats.frames_per_class["pre_game"] == 4          # every 0.5s inside the padded span
+    assert stats.frames_per_class["game_end"] == 7          # every 0.25s: short, so rare
+    assert stats.frames_per_class["finishing_blow"] == 7
+
+
+def test_an_unknown_class_is_an_error_and_keeps_the_old_frames(tmp_path):
+    """A class the script does not know used to be skipped silently, dropping it from training."""
+    video = tmp_path / "vid.mp4"
+    _write_test_video(video)
+    frames = tmp_path / "frames"
+    elf.extract_frames_from_video(video, _labels("vidA", [(0.0, 4.0, "non_gameplay")]), frames, elf.ExtractionStats())
+    before = sorted(p.name for p in frames.rglob("*.jpg"))
+
+    stats = elf.ExtractionStats()
+    typo = _labels("vidA", [(0.0, 2.0, "non_gameplay"), (2.0, 4.0, "game_ned")])
+    elf.extract_frames_from_video(video, typo, frames, stats)
+
+    assert stats.errors and "game_ned" in stats.errors[0]
+    assert sorted(p.name for p in frames.rglob("*.jpg")) == before
+
+
 def test_onnx_export_accepts_any_batch_size(tmp_path):
     """ISSUE-020: the exported model must run on batches larger than 1."""
     torch = pytest.importorskip("torch")

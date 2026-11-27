@@ -31,26 +31,16 @@ import argparse
 import json
 import random
 import shutil
+import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 
-# Scene classes (must match scene_labeler.py)
-SCENE_CLASSES = [
-    "non_gameplay",
-    "both_grounded",
-    "one_airborne",
-    "both_airborne",
-    "one_offstage",
-    "both_offstage",
-    "one_on_ledge",
-    "both_on_ledge",
-    "one_knocked_down",
-    "both_knocked_down",
-    "respawning",
-]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from label_segments import SCENE_CLASSES  # noqa: E402  (shared with the label tool and training)
 
 # Rare classes get more frequent sampling
 RARE_CLASSES = {
@@ -59,6 +49,8 @@ RARE_CLASSES = {
     "one_knocked_down",
     "both_knocked_down",
     "respawning",  # Short duration, needs more samples
+    "game_end",  # A few seconds per game
+    "finishing_blow",  # Under a second, at most once or twice per game
 }
 
 # Sampling intervals (seconds)
@@ -153,6 +145,18 @@ def extract_frames_from_video(
     stats: ExtractionStats,
 ) -> None:
     """Extract frames from a video based on labels, replacing its earlier frames."""
+    # A class this script does not know used to be skipped without a word, so a
+    # typo or a class added to the label tool but not here vanished from training.
+    unknown = sorted({
+        str(label.get("scene_class", label.get("class")))
+        for game in labels.get("games", [])
+        for label in game.get("labels", [])
+        if label.get("scene_class", label.get("class")) not in SCENE_CLASSES
+    })
+    if unknown:
+        stats.errors.append(f"{video_path.name}: unknown scene classes {unknown}; nothing extracted")
+        return
+
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         stats.errors.append(f"Could not open video: {video_path}")
@@ -178,8 +182,6 @@ def extract_frames_from_video(
 
         for label in game.get("labels", []):
             scene_class = label.get("scene_class", label.get("class"))
-            if not scene_class or scene_class not in SCENE_CLASSES:
-                continue
 
             start_sec = label.get("start_sec", 0)
             end_sec = label.get("end_sec", 0)

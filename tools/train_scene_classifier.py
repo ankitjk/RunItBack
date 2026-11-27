@@ -22,6 +22,7 @@ Examples:
 import argparse
 import copy
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -33,22 +34,11 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from torchvision.models import ConvNeXt_Tiny_Weights, convnext_tiny
 
-# Every scene class the labeler offers. The model's output order is not this
-# list: it is the class folders present in the training split, alphabetically
-# (ImageFolder), saved to class_mapping.json.
-SCENE_CLASSES = [
-    "non_gameplay",
-    "both_grounded",
-    "one_airborne",
-    "both_airborne",
-    "one_offstage",
-    "both_offstage",
-    "one_on_ledge",
-    "both_on_ledge",
-    "one_knocked_down",
-    "both_knocked_down",
-    "respawning",
-]
+# Every scene class the labeler offers (shared list, tools/label_segments.py).
+# The model's output order is not this list: it is the class folders present in
+# the training split, alphabetically (ImageFolder), saved to class_mapping.json.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from label_segments import SCENE_CLASSES  # noqa: E402
 
 
 def get_device() -> torch.device:

@@ -10,9 +10,10 @@ zoomed finishing blows were labelled as the state before the zoom. Its GAME!
 screens were relabelled from `non_gameplay` to `respawning` on 2026-11-25.
 
 **2026-11-26: three classes added** (`pre_game`, `game_end`, `finishing_blow`;
-14 in all). Not yet supported by the label tool, training or inference, and
-`XUkRx6CpL04` is not yet relabelled: its entrances are still `non_gameplay`,
-its GAME! screens `respawning`, and its finishing blows the state before the zoom.
+14 in all). The label tool (keys P, X, F) and training support them since
+2026-11-27; inference does not yet. `XUkRx6CpL04` is not yet relabelled: its
+entrances are still `non_gameplay`, its GAME! screens `respawning`, and its
+finishing blows the state before the zoom.
 
 ## Terms
 

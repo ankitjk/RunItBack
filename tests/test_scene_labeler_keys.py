@@ -212,3 +212,28 @@ def test_closing_with_an_open_label_warns_that_it_is_not_saved(labeler, close_pr
     press(Qt.Key_3)                    # opens a continuous label; nothing written yet
     assert not window.close()
     assert len(close_prompts) == 1 and "still open" in close_prompts[0]
+
+
+def test_the_label_tool_offers_exactly_the_shared_class_list(labeler):
+    sl = _load_tool("scene_labeler")
+    ls = _load_tool("label_segments")
+    assert [state.value for state in sl.SceneState] == ls.SCENE_CLASSES
+    assert [sl.SCENE_LABELS[i].value for i in sorted(sl.SCENE_LABELS)] == ls.SCENE_CLASSES
+    assert set(sl.CLASS_COLORS) == set(ls.SCENE_CLASSES)
+
+
+def test_p_x_and_f_label_the_new_classes(labeler):
+    window, press, spans = labeler
+    window.player.seek_frame(0)
+    press(Qt.Key_S)
+    press(Qt.Key_Right, times=30)      # 0.5s
+    press(Qt.Key_P)
+    press(Qt.Key_S)
+    press(Qt.Key_Right, times=30)      # 1.0s
+    press(Qt.Key_F)
+    window.player.seek_frame(150)      # 2.5s
+    press(Qt.Key_S)
+    press(Qt.Key_Right, times=60)      # 3.5s
+    press(Qt.Key_X)
+    assert spans() == [(0.0, 0.5, "pre_game"), (0.5, 1.0, "finishing_blow"), (1.0, 2.0, "both_grounded"),
+                       (2.0, 2.5, "one_airborne"), (2.5, 3.5, "game_end"), (3.5, 4.0, "one_airborne")]
