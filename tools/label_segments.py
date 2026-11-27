@@ -20,6 +20,27 @@ save, so opening and saving a file never drops them.
 
 from dataclasses import dataclass, field, replace
 
+# Every scene class, in the label tool's key order. The one list the label tool,
+# extraction and training share; definitions are in docs/SCENE_CLASSES.md.
+# Inference (runitback/cv/scene_classifier.py) reads a model's own class order
+# from its class_mapping.json instead.
+SCENE_CLASSES = [
+    "non_gameplay",
+    "both_grounded",
+    "one_airborne",
+    "both_airborne",
+    "one_offstage",
+    "both_offstage",
+    "one_on_ledge",
+    "both_on_ledge",
+    "one_knocked_down",
+    "both_knocked_down",
+    "respawning",
+    "pre_game",        # added 2026-11-26: entrances and countdown, until GO!
+    "game_end",        # added 2026-11-26: GAME! or TIME! screen, until the white flash
+    "finishing_blow",  # added 2026-11-26: the final-stock red flash
+]
+
 # Times are stored to 0.1 ms. Frames at 60fps are 16.7 ms apart, so a stored time
 # identifies its frame: round(time * fps).
 TIME_DECIMALS = 4

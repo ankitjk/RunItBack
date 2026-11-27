@@ -73,8 +73,9 @@ live path.
   Trained on a random frame split of one video, so it has no honest accuracy
   figure.
 - **Class definitions:** [SCENE_CLASSES.md](SCENE_CLASSES.md): 14 classes. The
-  label tool and training support the first 11; `pre_game`, `game_end` and
-  `finishing_blow` (defined 2026-11-26) are not yet supported or labelled.
+  label tool, extraction and training share one list (`SCENE_CLASSES` in
+  `tools/label_segments.py`); `pre_game`, `game_end` and `finishing_blow`
+  (keys P, X, F) are not yet labelled or handled by inference.
 - **Measured on unseen games** (game held out, November 16-24, 2026, before the
   GAME! screens were relabelled as `respawning`): 39-51% accuracy across runs; pooled 48.3% over three folds.
   The same code on a random frame split scores 76.4% - the difference is

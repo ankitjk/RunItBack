@@ -16,7 +16,7 @@ Labels are saved to data/scene_classifier/raw_labels/<video_id>.json unless
 --labels is given.
 
 Keyboard Shortcuts:
-    0-9, R  : Start labeling with class (continuous mode - auto-extends until changed)
+    0-9, R, P, X, F : Start labeling with class (continuous mode - auto-extends until changed)
     Space   : Pause/Play
     Left    : Previous frame (or 1 second if playing)
     Right   : Next frame (or 1 second if playing)
@@ -34,7 +34,7 @@ Keyboard Shortcuts:
     Q       : Quit
 
 Labeling Workflow (Continuous Mode):
-    1. Press 0-9 or R to start labeling with a class
+    1. Press a class key (0-9, R, P, X, F) to start labeling with a class
     2. Navigate through the video (the label extends as you go)
     3. When the scene changes, press a different class key
     4. The previous label is automatically closed and a new one starts
@@ -66,12 +66,12 @@ Game Boundaries:
     current game and starts the next one at that moment, so every second of the
     video belongs to a game. Press G in the menus between two games - after the
     previous game's results screen appears, before the next game's entrance.
-    The menus, entrances and countdown inside a game's span are labelled
-    non_gameplay like any other non-gameplay frame. Training splits by game, so
+    The menus inside a game's span are non_gameplay; its entrances and
+    countdown are pre_game. Training splits by game, so
     a boundary placed mid-gameplay would put one game's frames in two splits.
 
 Scene Classes (full definitions and tie-breaks: docs/SCENE_CLASSES.md):
-    0: non_gameplay      - Menus, loading, results, pauses; entrances and countdown before GO!
+    0: non_gameplay      - Menus, loading, character select, results, pauses
     1: both_grounded     - Both grounded within the stage
     2: one_airborne      - One in the air within the stage, the other grounded
     3: both_airborne     - Both in the air within the stage
@@ -81,9 +81,13 @@ Scene Classes (full definitions and tie-breaks: docs/SCENE_CLASSES.md):
     7: both_on_ledge     - Both hanging on a ledge
     8: one_knocked_down  - One knocked down or teching
     9: both_knocked_down - Both knocked down or teching
-    R: respawning        - KO flash or star KO, angel platform, stock count,
-                           GAME! or TIME! screen (until the wipe to results)
-    When the players' states differ, the higher-ranked one wins:
+    R: respawning        - KO flash or star KO, angel platform, stock count
+    P: pre_game          - Entrances and countdown, until the first frame of GO!
+    X: game_end          - GAME! or TIME! screen, until the white flash to results
+    F: finishing_blow    - The final-stock red flash, from its first frame until gone
+    The whole-screen classes (non_gameplay, pre_game, game_end, finishing_blow)
+    are checked first. Otherwise, when the players' states differ, the
+    higher-ranked one wins:
     respawning > offstage > on_ledge > knocked_down > airborne > grounded.
 """
 
@@ -259,7 +263,10 @@ class SceneState(Enum):
     BOTH_ON_LEDGE = "both_on_ledge"
     ONE_KNOCKED_DOWN = "one_knocked_down"
     BOTH_KNOCKED_DOWN = "both_knocked_down"
-    RESPAWNING = "respawning"  # KO, respawn platform, stock count, or GAME! screen
+    RESPAWNING = "respawning"  # KO flash or star KO, respawn platform, stock count
+    PRE_GAME = "pre_game"  # Entrances and countdown, until GO!
+    GAME_END = "game_end"  # GAME! or TIME! screen, until the white flash
+    FINISHING_BLOW = "finishing_blow"  # The final-stock red flash
 
 
 SCENE_LABELS = {
@@ -274,7 +281,13 @@ SCENE_LABELS = {
     8: SceneState.ONE_KNOCKED_DOWN,
     9: SceneState.BOTH_KNOCKED_DOWN,
     10: SceneState.RESPAWNING,
+    11: SceneState.PRE_GAME,
+    12: SceneState.GAME_END,
+    13: SceneState.FINISHING_BLOW,
 }
+
+# Letter keys for the classes past 9
+CLASS_LETTER_KEYS = {"R": 10, "P": 11, "X": 12, "F": 13}
 
 SCENE_COLORS = {
     SceneState.NON_GAMEPLAY: "#9E9E9E",       # Grey - not gameplay
@@ -288,6 +301,9 @@ SCENE_COLORS = {
     SceneState.ONE_KNOCKED_DOWN: "#795548",   # Brown
     SceneState.BOTH_KNOCKED_DOWN: "#607D8B",  # Blue Grey
     SceneState.RESPAWNING: "#FFEB3B",         # Yellow - respawn platform
+    SceneState.PRE_GAME: "#CFD8DC",           # Pale blue-grey - before GO!
+    SceneState.GAME_END: "#3F51B5",           # Indigo - GAME!/TIME! screen
+    SceneState.FINISHING_BLOW: "#B71C1C",     # Dark red - the red flash
 }
 
 STAGES = [
@@ -608,7 +624,7 @@ class LabelPanel(QWidget):
         self.segment_start_label = QLabel("Segment Start: --")
         segment_layout.addWidget(self.segment_start_label)
 
-        self.segment_class_label = QLabel("Class: (press 0-9 or R to label)")
+        self.segment_class_label = QLabel("Class: (press a class key to label)")
         segment_layout.addWidget(self.segment_class_label)
 
         layout.addWidget(segment_frame)
@@ -649,7 +665,7 @@ class LabelPanel(QWidget):
     def clear_segment_start(self):
         """Clear segment start display."""
         self.segment_start_label.setText("Segment Start: --")
-        self.segment_class_label.setText("Class: (press 0-9 or R to label)")
+        self.segment_class_label.setText("Class: (press a class key to label)")
 
     def update_segment_class(self, scene_class: SceneState):
         """Update segment class display."""
@@ -723,9 +739,9 @@ class LegendPanel(QWidget):
         layout.setSpacing(2)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        layout.addWidget(QLabel("<b>Scene Classes (0-9, R):</b>"))
+        layout.addWidget(QLabel("<b>Scene Classes (0-9, R, P, X, F):</b>"))
         class_info = [
-            ("0", "non_gameplay", "Menus, results, pre-GO!"),
+            ("0", "non_gameplay", "Menus, results, pauses"),
             ("1", "both_grounded", "Both grounded"),
             ("2", "one_airborne", "One in the air"),
             ("3", "both_airborne", "Both in the air"),
@@ -736,6 +752,9 @@ class LegendPanel(QWidget):
             ("8", "one_knocked_down", "One knocked down"),
             ("9", "both_knocked_down", "Both knocked down"),
             ("R", "respawning", "KO, angel platform"),
+            ("P", "pre_game", "Entrances, countdown"),
+            ("X", "game_end", "GAME! / TIME! screen"),
+            ("F", "finishing_blow", "Final-stock red flash"),
         ]
         classes = QGridLayout()
         classes.setHorizontalSpacing(6)
@@ -1094,7 +1113,7 @@ class SceneLabeler(QMainWindow):
         main_layout.addWidget(right_panel, stretch=1)
 
         # Status bar
-        self.statusBar().showMessage("Ready. Press 0-9 or R to start labeling (continuous mode).")
+        self.statusBar().showMessage("Ready. Press a class key to start labeling (continuous mode).")
 
     def _setup_shortcuts(self):
         """Setup keyboard shortcuts."""
@@ -1107,11 +1126,12 @@ class SceneLabeler(QMainWindow):
         QShortcut(Qt.Key_S, self, self._mark_segment_start)
         QShortcut(Qt.Key_E, self, self._mark_segment_end)
 
-        # Class assignment (0-9, R for respawning)
-        # 0 = non_gameplay, 1-9 = gameplay scene states, R = respawning
+        # Class assignment: 0 = non_gameplay, 1-9 = player states,
+        # R = respawning, P = pre_game, X = game_end, F = finishing_blow
         for i in range(0, 10):
             QShortcut(getattr(Qt, f"Key_{i}"), self, lambda x=i: self._assign_class(x))
-        QShortcut(Qt.Key_R, self, lambda: self._assign_class(10))  # R = respawning
+        for letter, class_num in CLASS_LETTER_KEYS.items():
+            QShortcut(getattr(Qt, f"Key_{letter}"), self, lambda x=class_num: self._assign_class(x))
 
         # Editing existing segments
         QShortcut(Qt.Key_C, self, self._start_change_class)
@@ -1358,7 +1378,7 @@ class SceneLabeler(QMainWindow):
         self.label_panel.update_segment_start(self.segment_start, mark=True)
         self._refresh_strips()
         self.statusBar().showMessage(
-            f"Mark at {self.segment_start:.3f}s. Move to the other end and press 0-9 or R "
+            f"Mark at {self.segment_start:.3f}s. Move to the other end and press a class key "
             "to label the stretch between. Esc cancels."
         )
 
@@ -1368,10 +1388,10 @@ class SceneLabeler(QMainWindow):
             self._finalize_current_label()
         elif self.segment_start is not None:
             self.statusBar().showMessage(
-                f"Mark at {self.segment_start:.3f}s: press 0-9 or R to label from it to here."
+                f"Mark at {self.segment_start:.3f}s: press a class key to label from it to here."
             )
         else:
-            self.statusBar().showMessage("No open label. Press 0-9 or R to start one, or S to set a mark.")
+            self.statusBar().showMessage("No open label. Press a class key to start one, or S to set a mark.")
 
     def _assign_class(self, class_num: int):
         """A class key. What it does depends on what is pending:
@@ -1454,7 +1474,7 @@ class SceneLabeler(QMainWindow):
         self.change_target = row
         self.label_panel.select_row(row)
         self.statusBar().showMessage(
-            f"Change {self._current_game.labels[row].describe()} to: press 0-9 or R (Esc cancels)"
+            f"Change {self._current_game.labels[row].describe()} to: press a class key (Esc cancels)"
         )
 
     def _split_at_playhead(self):

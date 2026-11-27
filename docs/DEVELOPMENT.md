@@ -8,6 +8,30 @@ The changelog of RunItBack: what changed in each session, why, and what was meas
 
 ## Changelog
 
+### November 27, 2026 - New Classes in the Label Tool and Training (Step 3, Part 1)
+
+**Session Goal:** Let `pre_game`, `game_end` and `finishing_blow` be labelled and trained, so the owner can start hand-labelling the gold games (plan step 4) while inference (ISSUE-017) and the relabel follow.
+
+**Problem:**
+- The class list was copied three times in `tools/` (label tool, extraction, training), and nothing checked they matched.
+- `extract_labeled_frames.py` skipped any class it did not know without a word. A `game_end` segment labelled with the new keys would have vanished from training while the totals looked normal.
+
+**Changes:**
+- `tools/label_segments.py` - `SCENE_CLASSES`, the one 14-class list, in key order. `extract_labeled_frames.py` and `train_scene_classifier.py` import it; the label tool's enum is tested against it.
+- `tools/scene_labeler.py` - keys P (`pre_game`), X (`game_end`), F (`finishing_blow`), with colours, legend rows and help text from `docs/SCENE_CLASSES.md`. The help no longer calls entrances `non_gameplay` or the GAME! screen `respawning`.
+- `tools/extract_labeled_frames.py` - a label file with an unknown class is an error (`build_scene_model.py` then stops) and its video's earlier frames are left untouched. `game_end` and `finishing_blow` are sampled every 0.25s like the other short classes; `pre_game` every 0.5s.
+- `docs/SCENE_CLASSES.md`, `docs/ARCHITECTURE.md` - support status.
+- Tests (6): the tool's classes, keys and colours match the shared list; P, X and F label by key press; the new classes are extracted at the right rates; an unknown class is refused without deleting earlier frames.
+
+**Results:**
+- Fast suite: 131 passed, 6 xfailed.
+- Not retrained: no video has the new classes yet. The deployed model and inference are unchanged.
+
+**Left Open:**
+- Step 3 continues: ISSUE-017 (inference reads `class_mapping.json`), the `SceneState` enum and gameplay test in `runitback/cv/scene_classifier.py`, the `respawning` rules and disadvantage tags in `runitback/classification/detector.py`, the relabel of `XUkRx6CpL04`, and the retrain.
+
+---
+
 ### November 27, 2026 - Plan: a Hand-Labelled Gold Set for Testing
 
 **Problem:**
