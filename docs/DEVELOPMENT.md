@@ -28,12 +28,15 @@ The changelog of RunItBack: what changed in each session, why, and what was meas
   - Times are stored per frame to 0.1 ms (`frame_time`), and seeking rounds back to that frame. The player shows the frame number; the table shows 3 decimals and its cells are no longer editable text.
   - Ctrl+Z restores a snapshot from before each change, so it undoes edits, game boundaries and stage changes, in any game.
   - Loading reports overlapping segments in the status bar and the terminal, without changing them.
+  - **Segment strips** (`SegmentStrip`, second commit), under the video slider: the whole game, and 10s around the playhead, where single frames are visible (at ~0.27s per pixel the whole-game strip cannot show a finishing-blow flash). Segments in their class colour; unlabelled time dark; `needs_review` hatched; overlaps as a red band; the selection outlined; the mark or open label shaded to the playhead. Click to jump and select; hover for class and times. The table of 216-352 rows per game showed none of this at a glance. Display only: the strips never change labels and never take keyboard focus.
+  - Screenshots of the off-screen window showed three display problems, fixed: the red playhead vanished on `both_offstage` (now white with a black outline); the legend overlapped itself and left the table 2 rows high (now two columns in a scroll area, with compact distribution rows; the table shows ~9 rows at 900px); and class names in the table were white on the light table background, so the Class column looked empty (now black on the class colour). The last predates this work.
+  - The Class Distribution panel shows labelled seconds per class instead of segment counts: training frames come from time.
 - `tests/test_label_segments.py` (new, 21 tests) - each edit, refusals, no overlaps after a sequence of overwrites, fields kept on the pieces, frame times mapping back to their frame at 60/59.94/30/29.97fps, and every real label file loading and saving unchanged.
-- `tests/test_scene_labeler_keys.py` (new, 4 tests) - drives the window with real key presses on a generated 4-second video: the mark (ISSUE-024), a refused mark edit not leaving the mark behind, continuous labelling replacing labels (ISSUE-025), and cut, change, move, delete, then Ctrl+Z back to the file exactly. Skipped where PyQt5 is not installed.
+- `tests/test_scene_labeler_keys.py` (new, 6 tests) - drives the window with real key presses on a generated 4-second video: the mark (ISSUE-024), a refused mark edit not leaving the mark behind, continuous labelling replacing labels (ISSUE-025), and cut, change, move, delete, then Ctrl+Z back to the file exactly. Two more check the strips: the colour drawn at a time matches its class and changes after an edit, and a click jumps there and selects the segment for Delete. Skipped where PyQt5 is not installed.
 - `docs/ARCHITECTURE.md`, `CLAUDE.md` - the label tool's editing rules and the new module.
 
 **Results:**
-- Fast suite: 109 passed, 6 xfailed (84 passed before; 25 new).
+- Fast suite: 111 passed, 6 xfailed (84 passed before; 27 new).
 - Off-screen run of the real tool on a copy of `XUkRx6CpL04.json` with the cached video (60fps): mark relabel, continuous relabel, cut, change, edge move, Delete with the table focused, and refusals all behaved as above, with no new overlaps. Ctrl+Z back to the start reproduced the file exactly, and the ground-truth file's checksum was unchanged.
 - Not yet used by a person on a real relabel; that is step 3.
 

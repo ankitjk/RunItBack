@@ -49,6 +49,15 @@ Editing Labels:
     - Edits are refused while a continuous label is open: E closes it, Esc drops it.
     Fields this tool does not use (e.g. needs_review in a draft) are kept on save.
 
+Segment Strips (under the video slider):
+    "Game" shows the whole current game; "10s" shows 10 seconds around the
+    playhead, where single frames are visible. Segments are in their class
+    colour; dark is unlabelled; hatched is needs_review; a red band along the
+    top is an overlap; the selected segment is outlined; the mark or open label
+    is shaded up to the playhead (white line). Click to jump there and select the
+    segment; hover for its class and times. The strips only display labels.
+    The Class Distribution panel shows labelled seconds per class, not counts.
+
 Game Boundaries:
     Games are contiguous: the first game starts at 0s, and each G press ends the
     current game and starts the next one at that moment, so every second of the
@@ -79,6 +88,7 @@ import argparse
 import copy
 import hashlib
 import json
+import math
 import re
 import subprocess
 import sys
@@ -88,8 +98,8 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
-from PyQt5.QtGui import QImage, QKeySequence, QPixmap
+from PyQt5.QtCore import QEvent, QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
+from PyQt5.QtGui import QBrush, QColor, QImage, QKeySequence, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -97,18 +107,21 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QProgressDialog,
     QPushButton,
+    QScrollArea,
     QShortcut,
     QSizePolicy,
     QSlider,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -606,6 +619,8 @@ class LabelPanel(QWidget):
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         # Cells are not editable text: edits go through the keys, which keep segments consistent
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.verticalHeader().setDefaultSectionSize(20)
+        self.table.horizontalHeader().setStretchLastSection(True)
         self.table.cellDoubleClicked.connect(self._on_cell_double_click)
         self.table.itemSelectionChanged.connect(self.selection_changed.emit)
         layout.addWidget(self.table)
@@ -664,11 +679,8 @@ class LabelPanel(QWidget):
             self.table.setItem(i, 1, QTableWidgetItem(f"{label.end_sec:.3f}s"))
 
             class_item = QTableWidgetItem(label.scene_class)
-            # Find the matching SceneState for color
-            for state in SceneState:
-                if state.value == label.scene_class:
-                    class_item.setForeground(Qt.GlobalColor.white)
-                    break
+            class_item.setBackground(QColor(CLASS_COLORS.get(label.scene_class, UNKNOWN_CLASS_COLOR)))
+            class_item.setForeground(QColor("black"))
             self.table.setItem(i, 2, class_item)
 
         self.stats_label.setText(f"Total: {len(labels)} labels")
@@ -685,6 +697,15 @@ class LabelPanel(QWidget):
                 pass
 
 
+CLASS_COLORS = {state.value: color for state, color in SCENE_COLORS.items()}
+UNKNOWN_CLASS_COLOR = "#888888"
+UNLABELLED_COLOR = "#1e1e1e"
+OUTSIDE_GAME_COLOR = "#000000"
+PLAYHEAD_COLOR = "#FFFFFF"
+OVERLAP_COLOR = "#FF1744"
+CLOSEUP_SECS = 10.0
+
+
 class LegendPanel(QWidget):
     """Panel showing keyboard shortcuts and scene class legend."""
 
@@ -693,69 +714,60 @@ class LegendPanel(QWidget):
         self._setup_ui()
 
     def _setup_ui(self):
+        # Two columns each, so the legend stays short enough to leave room for the
+        # labels table; the window also puts it in a scroll area.
         layout = QVBoxLayout(self)
         layout.setSpacing(2)
+        layout.setContentsMargins(4, 4, 4, 4)
 
-        # Scene classes legend
         layout.addWidget(QLabel("<b>Scene Classes (0-9, R):</b>"))
-
-        # Class descriptions
         class_info = [
-            ("0", "non_gameplay", "Menus, results, pauses, pre-GO!"),
+            ("0", "non_gameplay", "Menus, results, pre-GO!"),
             ("1", "both_grounded", "Both grounded"),
-            ("2", "one_airborne", "One in the air, one grounded"),
+            ("2", "one_airborne", "One in the air"),
             ("3", "both_airborne", "Both in the air"),
-            ("4", "one_offstage", "One off the side or below"),
+            ("4", "one_offstage", "One offstage"),
             ("5", "both_offstage", "Both offstage"),
             ("6", "one_on_ledge", "One on a ledge"),
             ("7", "both_on_ledge", "Both on a ledge"),
-            ("8", "one_knocked_down", "One knocked down or teching"),
-            ("9", "both_knocked_down", "Both knocked down or teching"),
-            ("R", "respawning", "KO, angel platform, GAME!"),
+            ("8", "one_knocked_down", "One knocked down"),
+            ("9", "both_knocked_down", "Both knocked down"),
+            ("R", "respawning", "KO, angel platform"),
         ]
-
-        for key, class_name, description in class_info:
-            row = QHBoxLayout()
-            row.setSpacing(4)
-
-            # Key badge
+        classes = QGridLayout()
+        classes.setHorizontalSpacing(6)
+        classes.setVerticalSpacing(1)
+        half = (len(class_info) + 1) // 2
+        for i, (key, class_name, description) in enumerate(class_info):
+            row, col = i % half, (i // half) * 3
             key_label = QLabel(f"<b>{key}</b>")
-            key_label.setFixedWidth(20)
-            key_label.setAlignment(Qt.AlignCenter)
-            row.addWidget(key_label)
-
-            # Color indicator - convert key to int if numeric, else use special mapping
-            key_int = int(key) if key.isdigit() else {"R": 10}.get(key)
-            state = SCENE_LABELS.get(key_int)
-            color = SCENE_COLORS.get(state, "#888888")
+            key_label.setFixedWidth(14)
+            classes.addWidget(key_label, row, col)
             color_box = QFrame()
             color_box.setFixedSize(12, 12)
-            color_box.setStyleSheet(f"background-color: {color}; border-radius: 2px;")
-            row.addWidget(color_box)
-
-            # Description
+            color_box.setStyleSheet(
+                f"background-color: {CLASS_COLORS.get(class_name, UNKNOWN_CLASS_COLOR)}; border-radius: 2px;"
+            )
+            classes.addWidget(color_box, row, col + 1)
             desc_label = QLabel(f"<small>{description}</small>")
-            desc_label.setWordWrap(True)
-            row.addWidget(desc_label, stretch=1)
+            desc_label.setToolTip(class_name)
+            classes.addWidget(desc_label, row, col + 2)
+        layout.addLayout(classes)
 
-            layout.addLayout(row)
-
-        # Separator
         separator = QFrame()
         separator.setFrameShape(QFrame.HLine)
         separator.setFrameShadow(QFrame.Sunken)
         layout.addWidget(separator)
 
-        # Other shortcuts
         layout.addWidget(QLabel("<b>Controls:</b>"))
         shortcuts = [
-            ("Space", "Play/Pause"),
-            ("← →", "Prev/Next frame"),
-            ("S", "Mark; class key labels mark→here"),
+            ("Space", "Play / pause"),
+            ("\u2190 \u2192", "Prev / next frame"),
+            ("S", "Mark; class key fills to here"),
             ("E", "Close open label here"),
             ("C", "Change class of target"),
             ("K", "Cut segment here"),
-            ("[  ]", "Move target start / end here"),
+            ("[ ]", "Move start / end here"),
             ("Delete", "Delete target"),
             ("Esc", "Cancel; clear selection"),
             ("G", "Next game starts here"),
@@ -764,16 +776,22 @@ class LegendPanel(QWidget):
             ("Ctrl+Z", "Undo last change"),
             ("Q", "Quit"),
         ]
+        controls = QGridLayout()
+        controls.setHorizontalSpacing(6)
+        controls.setVerticalSpacing(1)
+        half = (len(shortcuts) + 1) // 2
+        for i, (key, action) in enumerate(shortcuts):
+            row, col = i % half, (i // half) * 2
+            controls.addWidget(QLabel(f"<small><b>{key}</b></small>"), row, col)
+            controls.addWidget(QLabel(f"<small>{action}</small>"), row, col + 1)
+        layout.addLayout(controls)
 
-        for key, action in shortcuts:
-            row = QHBoxLayout()
-            row.setSpacing(4)
-            key_label = QLabel(f"<b>{key}</b>")
-            key_label.setFixedWidth(50)
-            row.addWidget(key_label)
-            row.addWidget(QLabel(f"<small>{action}</small>"), stretch=1)
-            layout.addLayout(row)
-
+        strips = QLabel(
+            "<small><b>Strips:</b> click to jump and select. Hatched = needs review, "
+            "red band on top = overlap, dark = unlabelled.</small>"
+        )
+        strips.setWordWrap(True)
+        layout.addWidget(strips)
         layout.addStretch()
 
 
@@ -786,20 +804,24 @@ class ClassDistributionPanel(QWidget):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("<b>Class Distribution:</b>"))
+        layout.setSpacing(0)
+        layout.setContentsMargins(4, 4, 4, 4)
+        # Time, not segment count: training frames come from time, and one 20s
+        # segment would otherwise weigh the same as a 0.2s one.
+        layout.addWidget(QLabel("<b>Class Distribution (seconds, this game):</b>"))
 
         self.bars = {}
         for state in SceneState:
             row = QHBoxLayout()
 
             # Class name
-            name_label = QLabel(f"{state.value}:")
+            name_label = QLabel(f"<small>{state.value}:</small>")
             name_label.setMinimumWidth(120)
             row.addWidget(name_label)
 
             # Progress bar (using QFrame)
             bar = QFrame()
-            bar.setFixedHeight(16)
+            bar.setFixedHeight(10)
             bar.setStyleSheet(
                 f"background-color: {SCENE_COLORS.get(state, '#888')}; "
                 "border-radius: 3px;"
@@ -820,24 +842,163 @@ class ClassDistributionPanel(QWidget):
         layout.addStretch()
 
     def update_distribution(self, labels: list[SegmentLabel]):
-        """Update distribution display."""
-        # Count by class
-        counts = {state: 0 for state in SceneState}
+        """Show the labelled seconds per class."""
+        seconds = {state: 0.0 for state in SceneState}
+        by_value = {state.value: state for state in SceneState}
         for label in labels:
-            for state in SceneState:
-                if state.value == label.scene_class:
-                    counts[state] += 1
-                    break
+            state = by_value.get(label.scene_class)
+            if state is not None:
+                seconds[state] += label.end_sec - label.start_sec
 
-        total = sum(counts.values()) or 1
-
-        # Update bars
+        total = sum(seconds.values()) or 1.0
         for state, (bar, count_label) in self.bars.items():
-            count = counts[state]
-            pct = count / total
-            width = int(pct * 200)
-            bar.setFixedWidth(max(1, width) if count > 0 else 0)
-            count_label.setText(str(count))
+            secs = seconds[state]
+            bar.setFixedWidth(max(1, int(secs / total * 200)) if secs > 0 else 0)
+            count_label.setText(f"{secs:.1f}s")
+
+
+
+
+class SegmentStrip(QWidget):
+    """A coloured bar of the current game's segments, for seeing labels at a glance.
+
+    window_secs None draws the whole game; a number draws that many seconds
+    centred on the playhead, where single frames are wide enough to see.
+    Drawn: segments in their class colour, unlabelled time dark, needs_review
+    hatched, overlaps as a red band along the top, the selected segment
+    outlined, the mark or open label shaded up to the playhead, and the
+    playhead as a white line. Clicking emits the time and the segment under it.
+    Display only: it never changes labels, and it never takes keyboard focus.
+    """
+
+    clicked = pyqtSignal(float, object)  # time, row index under the click or None
+
+    def __init__(self, window_secs: float | None = None, parent=None):
+        super().__init__(parent)
+        self.window_secs = window_secs
+        self.labels: list[SegmentLabel] = []
+        self.game_start = 0.0
+        self.game_end = 1.0
+        self.playhead = 0.0
+        self.pending_start: float | None = None
+        self.pending_class: str | None = None
+        self.selected: int | None = None
+        self._overlaps_of: list[SegmentLabel] | None = None
+        self._overlap_spans: list[tuple[float, float]] = []
+        self.setFixedHeight(18 if window_secs is None else 28)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setMinimumWidth(200)
+
+    def set_state(self, labels, game_start, game_end, playhead, pending_start, pending_class, selected):
+        if labels is not self._overlaps_of:  # edits make a new list, so this is a cheap cache
+            self._overlaps_of = labels
+            self._overlap_spans = [(b.start_sec, min(a.end_sec, b.end_sec)) for a, b in overlaps(labels)]
+        self.labels = labels
+        self.game_start = game_start
+        self.game_end = game_end if game_end > game_start else game_start + 1.0
+        self.playhead = playhead
+        self.pending_start = pending_start
+        self.pending_class = pending_class
+        self.selected = selected
+        self.update()
+
+    def time_range(self) -> tuple[float, float]:
+        if self.window_secs is None:
+            return self.game_start, self.game_end
+        return self.playhead - self.window_secs / 2, self.playhead + self.window_secs / 2
+
+    def x_of(self, t: float) -> float:
+        lo, hi = self.time_range()
+        return (t - lo) / (hi - lo) * self.width()
+
+    def time_at(self, x: float) -> float:
+        lo, hi = self.time_range()
+        return lo + x / max(1, self.width()) * (hi - lo)
+
+    def _span(self, a: float, b: float, min_width: float = 1.0) -> QRectF:
+        x0, x1 = self.x_of(a), self.x_of(b)
+        return QRectF(x0, 0, max(min_width, x1 - x0), self.height())
+
+    def _rows_at(self, t: float) -> list[int]:
+        return [i for i, s in enumerate(self.labels) if s.start_sec <= t < s.end_sec]
+
+    def paintEvent(self, event):  # noqa: N802 - Qt override name
+        p = QPainter(self)
+        w, h = self.width(), self.height()
+        lo, hi = self.time_range()
+        p.fillRect(0, 0, w, h, QColor(UNLABELLED_COLOR))
+        for a, b in ((lo, self.game_start), (self.game_end, hi)):
+            if b > a:
+                p.fillRect(self._span(a, b), QColor(OUTSIDE_GAME_COLOR))
+
+        hatch = QBrush(QColor(0, 0, 0, 150), Qt.BDiagPattern)
+        visible = [s for s in self.labels if s.end_sec > lo and s.start_sec < hi]
+        for s in visible:
+            rect = self._span(max(s.start_sec, lo), min(s.end_sec, hi))
+            p.fillRect(rect, QColor(CLASS_COLORS.get(s.scene_class, UNKNOWN_CLASS_COLOR)))
+            if s.extra.get("needs_review"):
+                p.fillRect(rect, hatch)
+
+        if self.window_secs is not None:
+            # Edges, so two touching segments of one class still read as two
+            p.setPen(QPen(QColor(0, 0, 0, 170), 1))
+            for s in visible:
+                x = self.x_of(s.start_sec)
+                p.drawLine(QPointF(x, 0), QPointF(x, h))
+            # A tick every second
+            p.setPen(QPen(QColor(255, 255, 255, 120), 1))
+            t = math.ceil(lo)
+            while t <= hi:
+                x = self.x_of(t)
+                p.drawLine(QPointF(x, h - 5), QPointF(x, h))
+                t += 1
+
+        for a, b in self._overlap_spans:
+            if b > lo and a < hi:
+                p.fillRect(QRectF(self.x_of(a), 0, max(2.0, self.x_of(b) - self.x_of(a)), 4), QColor(OVERLAP_COLOR))
+
+        if self.pending_start is not None:
+            a, b = sorted((self.pending_start, self.playhead))
+            shade = QColor(CLASS_COLORS.get(self.pending_class, "#FFFFFF") if self.pending_class else "#FFFFFF")
+            shade.setAlpha(150 if self.pending_class else 90)
+            p.fillRect(self._span(a, b), shade)
+            p.setPen(QPen(QColor("white"), 1, Qt.DashLine))
+            x = self.x_of(self.pending_start)
+            p.drawLine(QPointF(x, 0), QPointF(x, h))
+
+        if self.selected is not None and 0 <= self.selected < len(self.labels):
+            s = self.labels[self.selected]
+            if s.end_sec > lo and s.start_sec < hi:
+                rect = self._span(max(s.start_sec, lo), min(s.end_sec, hi), min_width=3.0)
+                p.setPen(QPen(QColor("white"), 2))
+                p.setBrush(Qt.NoBrush)
+                p.drawRect(rect.adjusted(1, 1, -1, -1))
+
+        # White with a black outline, so it shows on every class colour
+        x = self.x_of(self.playhead)
+        for colour, width in (("black", 4), (PLAYHEAD_COLOR, 2)):
+            p.setPen(QPen(QColor(colour), width))
+            p.drawLine(QPointF(x, 0), QPointF(x, h))
+        p.end()
+
+    def mousePressEvent(self, event):  # noqa: N802 - Qt override name
+        if event.button() != Qt.LeftButton:
+            return
+        t = self.time_at(event.pos().x())
+        rows = self._rows_at(t)
+        self.clicked.emit(t, rows[0] if rows else None)
+
+    def event(self, e):
+        if e.type() == QEvent.ToolTip:
+            t = self.time_at(e.pos().x())
+            hits = [self.labels[i] for i in self._rows_at(t)]
+            parts = [s.describe() + (" (needs review)" if s.extra.get("needs_review") else "") for s in hits]
+            text = f"{t:.3f}s: " + ("; ".join(parts) if parts else "unlabelled")
+            if len(hits) > 1:
+                text += "  - OVERLAP"
+            QToolTip.showText(e.globalPos(), text, self)
+            return True
+        return super().event(e)
 
 
 class SceneLabeler(QMainWindow):
@@ -877,12 +1038,30 @@ class SceneLabeler(QMainWindow):
         self.player.frame_changed.connect(self._on_frame_changed)
         main_layout.addWidget(self.player, stretch=2)
 
+        # Segment strips, under the video's slider: the whole game, then a close-up
+        self.overview_strip = SegmentStrip()
+        self.closeup_strip = SegmentStrip(window_secs=CLOSEUP_SECS)
+        for position, (caption, strip) in enumerate(
+            (("Game", self.overview_strip), (f"{CLOSEUP_SECS:.0f}s", self.closeup_strip)), start=2
+        ):
+            row = QHBoxLayout()
+            label = QLabel(f"<small>{caption}</small>")
+            label.setFixedWidth(34)
+            row.addWidget(label)
+            row.addWidget(strip, stretch=1)
+            strip.clicked.connect(self._on_strip_clicked)
+            self.player.layout().insertLayout(position, row)
+
         # Right side: panels
         right_panel = QSplitter(Qt.Vertical)
 
         # Legend panel (top)
         self.legend_panel = LegendPanel()
-        right_panel.addWidget(self.legend_panel)
+        legend_scroll = QScrollArea()
+        legend_scroll.setWidget(self.legend_panel)
+        legend_scroll.setWidgetResizable(True)
+        legend_scroll.setFrameShape(QFrame.NoFrame)
+        right_panel.addWidget(legend_scroll)
 
         self.label_panel = LabelPanel()
         self.label_panel.label_selected.connect(self.player.seek_time)
@@ -890,10 +1069,14 @@ class SceneLabeler(QMainWindow):
         right_panel.addWidget(self.label_panel)
 
         self.dist_panel = ClassDistributionPanel()
-        right_panel.addWidget(self.dist_panel)
+        dist_scroll = QScrollArea()
+        dist_scroll.setWidget(self.dist_panel)
+        dist_scroll.setWidgetResizable(True)
+        dist_scroll.setFrameShape(QFrame.NoFrame)
+        right_panel.addWidget(dist_scroll)
 
         # Set initial sizes (legend smaller, labels bigger)
-        right_panel.setSizes([250, 300, 150])
+        right_panel.setSizes([230, 470, 200])
 
         main_layout.addWidget(right_panel, stretch=1)
 
@@ -991,6 +1174,28 @@ class SceneLabeler(QMainWindow):
                 self.label_panel.select_row(segment_at(game.labels, select_at))
             except EditError:
                 pass
+        self._refresh_strips()
+
+    def _refresh_strips(self):
+        """Redraw both segment strips from the current game, playhead, mark and selection."""
+        if self.video_labels is None:
+            return
+        game = self._current_game
+        game_end = game.end_sec if game.end_sec > game.start_sec else self.player.get_duration()
+        for strip in (self.overview_strip, self.closeup_strip):
+            strip.set_state(
+                game.labels, game.start_sec, game_end, self.player.get_current_time(),
+                self.segment_start, self.current_class.value if self.current_class else None,
+                self.label_panel.selected_index(),
+            )
+
+    def _on_strip_clicked(self, t: float, row: int | None):
+        """A click on a strip: jump there, and select the segment clicked (if still in this game)."""
+        game_index = self.current_game_index
+        self.player.seek_time(t)
+        if self.current_game_index == game_index:
+            self.label_panel.select_row(row)
+        self._refresh_strips()
 
     def _warn_overlaps(self):
         """Say where a loaded file has segments covering the same time. Nothing is changed."""
@@ -1028,6 +1233,7 @@ class SceneLabeler(QMainWindow):
                         f"Switched to Game {game.game_number} ({game.stage})"
                     )
                 break
+        self._refresh_strips()
 
     def _on_left_key(self):
         """Handle left arrow key."""
@@ -1105,8 +1311,10 @@ class SceneLabeler(QMainWindow):
         self.current_class = None
         self.change_target = None
         self.label_panel.clear_segment_start()
+        self._refresh_strips()
 
     def _on_selection_changed(self):
+        self._refresh_strips()
         row = self.label_panel.selected_index()
         labels = self._current_game.labels
         if row is not None and row < len(labels):
@@ -1122,6 +1330,7 @@ class SceneLabeler(QMainWindow):
         self.segment_start = self._now()
         self.current_class = None
         self.label_panel.update_segment_start(self.segment_start, mark=True)
+        self._refresh_strips()
         self.statusBar().showMessage(
             f"Mark at {self.segment_start:.3f}s. Move to the other end and press 0-9 or R "
             "to label the stretch between. Esc cancels."
@@ -1187,6 +1396,7 @@ class SceneLabeler(QMainWindow):
         self.current_class = new_class
         self.label_panel.update_segment_start(self.segment_start)
         self.label_panel.update_segment_class(new_class)
+        self._refresh_strips()
         self.statusBar().showMessage(
             f"Labeling: {new_class.value} (from {now:.3f}s - press a different key to end)"
         )

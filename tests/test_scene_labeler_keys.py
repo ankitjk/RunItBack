@@ -113,3 +113,39 @@ def test_cut_change_move_delete_and_undo_back_to_the_file(labeler):
     while window.undo_stack:
         press(Qt.Key_Z, Qt.ControlModifier)
     assert window.video_labels.to_dict() == original
+
+
+def _colour_at(strip, t):
+    """The strip's colour at time t, sampled a third of the way down (clear of the overlap band)."""
+    image = strip.grab().toImage()
+    x = int(strip.x_of(t) * image.width() / strip.width())
+    return image.pixelColor(x, image.height() // 3).name().upper()
+
+
+def test_strips_show_segments_in_class_colours_and_follow_edits(labeler):
+    window, press, spans = labeler
+    sl = _load_tool("scene_labeler")
+    strip = window.overview_strip
+    window.player.seek_frame(0)
+    assert _colour_at(strip, 1.0) == sl.CLASS_COLORS["both_grounded"].upper()
+    assert _colour_at(strip, 3.0) == sl.CLASS_COLORS["one_airborne"].upper()
+
+    window.player.seek_frame(150)      # 2.5s
+    press(Qt.Key_S)
+    press(Qt.Key_Right, times=60)      # 3.5s
+    press(Qt.Key_R)
+    assert _colour_at(strip, 3.0) == sl.CLASS_COLORS["respawning"].upper()
+    assert _colour_at(window.closeup_strip, 3.0) == sl.CLASS_COLORS["respawning"].upper()
+
+
+def test_clicking_a_strip_jumps_there_and_selects_the_segment(labeler):
+    from PyQt5.QtCore import QPoint
+
+    window, press, spans = labeler
+    strip = window.overview_strip
+    QTest.mouseClick(strip, Qt.LeftButton, pos=QPoint(int(strip.x_of(3.0)), strip.height() // 2))
+    QApplication.processEvents()
+    assert abs(window.player.get_current_time() - 3.0) < 0.1
+    assert window.label_panel.selected_index() == 1
+    press(Qt.Key_Delete)               # acts on the clicked segment
+    assert spans() == [(0.0, 2.0, "both_grounded")]
