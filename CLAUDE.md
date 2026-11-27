@@ -38,7 +38,7 @@ are in docs/ARCHITECTURE.md.
 | `runitback/cv/ui_detector.py` | HUD regions, GO!/GAME! detection, frame types |
 | `runitback/cv/scene_classifier.py` | Scene classification (ConvNeXt-Tiny, ONNX) |
 | `runitback/cv/character_detector.py`, `llm_detector.py` | Characters: Gemini, or template matching without a key |
-| `tools/` | Labelling (`scene_labeler.py`), model build in one command (`build_scene_model.py`: splits via `extract_labeled_frames.py`, training via `train_scene_classifier.py`), benchmark (`test_stock_losses.py`) |
+| `tools/` | Labelling (`scene_labeler.py`; edits and the label-file format in `label_segments.py`), model build in one command (`build_scene_model.py`: splits via `extract_labeled_frames.py`, training via `train_scene_classifier.py`), benchmark (`test_stock_losses.py`) |
 | `scripts/` | `check_docs.py`, git hooks, `fetch_model.sh` |
 
 ## Running things

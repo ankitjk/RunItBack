@@ -84,7 +84,12 @@ live path.
   the main limit (ISSUE-006).
 
 Training workflow (`tools/`): `scene_labeler.py` (PyQt5; writes time-segment
-labels to `data/scene_classifier/raw_labels/<video_id>.json`), then
+labels to `data/scene_classifier/raw_labels/<video_id>.json`; its edits are in
+`label_segments.py`: labelling already-labelled time replaces it, so segments
+never overlap, times are stored per frame, and fields the tool does not use are
+kept on save; a segment a person decides is marked `source: "human"`;
+coloured strips show the game's segments and a 10s close-up),
+then
 `build_scene_model.py`, which runs the next two steps into a run folder
 `data/models/runs/<name>/` and records labels, split and results in `run.json`:
 - `extract_labeled_frames.py`: frames every 0.5s, 0.25s for rare classes. A
