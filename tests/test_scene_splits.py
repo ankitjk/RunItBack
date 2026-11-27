@@ -265,6 +265,22 @@ def test_an_unknown_class_is_an_error_and_keeps_the_old_frames(tmp_path):
     assert sorted(p.name for p in frames.rglob("*.jpg")) == before
 
 
+def test_a_gold_video_is_never_extracted_for_training(tmp_path):
+    """Gold videos are the test set (plan step 4); training on one would leak the exam."""
+    video = tmp_path / "vid.mp4"
+    _write_test_video(video)
+    frames = tmp_path / "frames"
+    elf.extract_frames_from_video(video, _labels("vidA", [(0.0, 4.0, "non_gameplay")]), frames, elf.ExtractionStats())
+    before = sorted(p.name for p in frames.rglob("*.jpg"))
+
+    stats = elf.ExtractionStats()
+    gold = {**_labels("vidA", [(0.0, 4.0, "both_grounded")]), "role": "gold"}
+    elf.extract_frames_from_video(video, gold, frames, stats)
+
+    assert stats.errors and "gold" in stats.errors[0] and stats.total_frames == 0
+    assert sorted(p.name for p in frames.rglob("*.jpg")) == before
+
+
 def test_onnx_export_accepts_any_batch_size(tmp_path):
     """ISSUE-020: the exported model must run on batches larger than 1."""
     torch = pytest.importorskip("torch")

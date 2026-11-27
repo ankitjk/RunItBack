@@ -85,7 +85,9 @@ live path.
   the main limit (ISSUE-006).
 
 Training workflow (`tools/`): `scene_labeler.py` (PyQt5; writes time-segment
-labels to `data/scene_classifier/raw_labels/<video_id>.json`; its edits are in
+labels to `data/scene_classifier/raw_labels/<video_id>.json`, or for a gold
+(test-only) video, with `--gold`, to `data/scene_classifier/gold_labels/`,
+which extraction refuses; its edits are in
 `label_segments.py`: labelling already-labelled time replaces it, so segments
 never overlap, times are stored per frame, and fields the tool does not use are
 kept on save; a segment a person decides is marked `source: "human"`;

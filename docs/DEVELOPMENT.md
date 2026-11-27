@@ -8,6 +8,23 @@ The changelog of RunItBack: what changed in each session, why, and what was meas
 
 ## Changelog
 
+### November 27, 2026 - Gold Videos Cannot Reach Training
+
+**Session Goal:** Before the owner starts hand-labelling the two gold games (plan step 4), make sure they can never be trained on.
+
+**Problem:** The label tool saved every video's labels to `data/scene_classifier/raw_labels/`, the folder training reads, and nothing marked a video as test-only. A gold game labelled there would have been extracted and trained on by the next build, quietly turning the test set into training data.
+
+**Changes:**
+- `tools/label_segments.py` - `TRAINING_LABELS_DIR` and `GOLD_LABELS_DIR` (`data/scene_classifier/gold_labels/`), `is_gold()`, and `default_labels_path()`, which refuses a video that already has labels in the other folder: a video is training or gold, never both.
+- `tools/scene_labeler.py` - `--gold`: labels go to the gold folder, the file gets `"role": "gold"`, and the title starts `[GOLD: test only]`. A file that says gold opens as gold even without the flag.
+- `tools/extract_labeled_frames.py` - a file marked gold is an error, nothing is extracted from it, and earlier frames are kept. This also catches a gold file copied into `raw_labels/`.
+- Tests (3): the folder rule both ways and the role surviving a round trip; extraction refusing a gold file; the tool saving and reopening a gold video as gold.
+- Owner's candidate gold videos, checked against YouTube's metadata: `g5T1i-l9rrY` (Minnesota Smash Ultimate, 1080p, 9:21) and `QgVHJs1CWU0` (Wisconsin Smash, 720p, 13:50). The second is from the same channel as the training video `XUkRx6CpL04`, so it probably shares its overlay and its score would flatter the model; raised with the owner. Neither is a stock-loss benchmark set.
+
+**Results:** Fast suite: 135 passed, 6 xfailed. Nothing trained.
+
+---
+
 ### November 27, 2026 - New Classes in the Label Tool and Training (Step 3, Part 1)
 
 **Session Goal:** Let `pre_game`, `game_end` and `finishing_blow` be labelled and trained, so the owner can start hand-labelling the gold games (plan step 4) while inference (ISSUE-017) and the relabel follow.
@@ -1094,10 +1111,12 @@ game 3, 41% of game time was accepted that way and 22% of it was wrong). So:
      exist (step 3), before the retrain. The videos' other games are not
      labelled and never trained on; they may be hand-labelled later as more
      test data.
-   - Label files get a top-level `role`: `gold` or `training` (none =
-     `training`). `build_scene_model.py` uses gold videos only as test data and
-     refuses to train on them; `extract_labeled_frames.py` keeps them out of
-     train and validation.
+   - *(Done 2026-11-27.)* Gold label files are made with
+     `scene_labeler.py --gold`: they live in
+     `data/scene_classifier/gold_labels/`, not `raw_labels/` (which training
+     reads), and carry `"role": "gold"`. `extract_labeled_frames.py` refuses
+     any file marked gold, and a video cannot have labels in both folders.
+     Scoring a model on gold files is step 5.
    - A model may be scored on a gold game only if the label file says `gold`
      **and** its `run.json` shows the video in none of `split.train_games`
      (which already lists every game used for training and validation). The

@@ -237,3 +237,27 @@ def test_p_x_and_f_label_the_new_classes(labeler):
     press(Qt.Key_X)
     assert spans() == [(0.0, 0.5, "pre_game"), (0.5, 1.0, "finishing_blow"), (1.0, 2.0, "both_grounded"),
                        (2.0, 2.5, "one_airborne"), (2.5, 3.5, "game_end"), (3.5, 4.0, "one_airborne")]
+
+
+def test_a_gold_video_is_marked_gold_and_saved_as_gold(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    sl = _load_tool("scene_labeler")
+    video = tmp_path / "clip.mp4"
+    out = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"mp4v"), FPS, (64, 36))
+    for i in range(FPS):
+        out.write(np.full((36, 64, 3), i, dtype=np.uint8))
+    out.release()
+    labels = tmp_path / "gold.json"
+
+    window = sl.SceneLabeler(str(video), str(labels), gold=True)
+    app.processEvents()
+    assert window.windowTitle().startswith("[GOLD")
+    window._save_labels()
+    assert json.loads(labels.read_text())["role"] == "gold"
+    window.player.cleanup()
+
+    # Opened later without --gold, the file still says gold, and the tool shows it
+    again = sl.SceneLabeler(str(video), str(labels))
+    app.processEvents()
+    assert again.gold and again.windowTitle().startswith("[GOLD")
+    again.player.cleanup()

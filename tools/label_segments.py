@@ -19,6 +19,7 @@ save, so opening and saving a file never drops them.
 """
 
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 # Every scene class, in the label tool's key order. The one list the label tool,
 # extraction and training share; definitions are in docs/SCENE_CLASSES.md.
@@ -40,6 +41,33 @@ SCENE_CLASSES = [
     "game_end",        # added 2026-11-26: GAME! or TIME! screen, until the white flash
     "finishing_blow",  # added 2026-11-26: the final-stock red flash
 ]
+
+# Training videos' labels, and gold videos' labels. A gold video is test data
+# only: one game hand-labelled blind, never trained on (plan step 4). Keeping
+# the two in separate folders means training, which reads raw_labels, never
+# sees a gold file; extraction also refuses any file marked role "gold".
+TRAINING_LABELS_DIR = Path("data/scene_classifier/raw_labels")
+GOLD_LABELS_DIR = Path("data/scene_classifier/gold_labels")
+
+
+def is_gold(labels: dict) -> bool:
+    """True for a gold (test-only) video's label data."""
+    return labels.get("role") == "gold"
+
+
+def default_labels_path(video_id: str, gold: bool) -> Path:
+    """Where a video's labels live. Raises ValueError if the video already has
+    labels on the other side: a video is either training or gold, never both."""
+    own, other = (GOLD_LABELS_DIR, TRAINING_LABELS_DIR) if gold else (TRAINING_LABELS_DIR, GOLD_LABELS_DIR)
+    if (other / f"{video_id}.json").exists():
+        kind, other_kind = ("gold", "training") if gold else ("training", "gold")
+        raise ValueError(
+            f"{video_id} already has {other_kind} labels ({other / f'{video_id}.json'}); "
+            f"it cannot also be a {kind} video."
+            + ("" if gold else " Open it with --gold.")
+        )
+    return own / f"{video_id}.json"
+
 
 # Times are stored to 0.1 ms. Frames at 60fps are 16.7 ms apart, so a stored time
 # identifies its frame: round(time * fps).
