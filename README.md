@@ -213,9 +213,15 @@ pip install -r tools/requirements-labeling.txt   # PyQt5
 pip install -r tools/requirements-training.txt   # PyTorch, ONNX
 
 python tools/scene_labeler.py "<video file or YouTube URL>"   # label segments by scene class
-python tools/extract_labeled_frames.py                        # labels -> frames, split by game (one game held out)
-python tools/train_scene_classifier.py                        # fine-tune ConvNeXt-Tiny, export ONNX
+python tools/build_scene_model.py --test-game 3               # extract, split, train, test, export
+python tools/build_scene_model.py --test-video <VIDEO_ID>     # hold out a whole video instead
 ```
+
+Each build writes its own folder, `data/models/runs/<name>/`: the ONNX model,
+its class order, test metrics, and `run.json` recording the labels and split it
+was built from. The deployed model (`data/models/scene_classifier.onnx`) is not
+replaced. `extract_labeled_frames.py` and `train_scene_classifier.py` can still
+be run separately.
 
 The model is fine-tuned from ImageNet weights. Class definitions are in
 [docs/SCENE_CLASSES.md](docs/SCENE_CLASSES.md). Data is split by game because
