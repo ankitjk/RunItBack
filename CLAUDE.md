@@ -24,8 +24,10 @@ are in docs/ARCHITECTURE.md.
 - **Gemini is off:** no `GEMINI_API_KEY` is configured. Characters come from
   template matching and are often wrong (ISSUE-013); say so when reporting them.
 - **Stage detection is off:** every game reports `unknown` (ISSUE-009).
-- **The deployed scene model has 7 hardcoded classes** (ISSUE-017), so a
-  retrained model cannot be dropped in. Only one video is labelled (ISSUE-006).
+- **The deployed scene model is the old 7-class one.** Inference reads a
+  model's classes from the `class_mapping.json` beside it, so a run folder's
+  model can be deployed by copying both files, but none has been: that is a
+  deliberate decision. Only one video is labelled (ISSUE-006).
 
 ## Code map
 

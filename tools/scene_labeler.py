@@ -5,7 +5,7 @@ A PyQt5-based tool for labeling video segments with scene states and stage infor
 Supports both local video files and YouTube URLs.
 
 Usage:
-    .venv/bin/python tools/scene_labeler.py <video_path_or_youtube_url> [--labels <labels.json>]
+    .venv/bin/python tools/scene_labeler.py <video_path_or_youtube_url> [--labels <labels.json>] [--gold]
 
 Examples:
     .venv/bin/python tools/scene_labeler.py path/to/video.mp4
@@ -13,7 +13,10 @@ Examples:
     .venv/bin/python tools/scene_labeler.py "https://youtu.be/VIDEO_ID"
 
 Labels are saved to data/scene_classifier/raw_labels/<video_id>.json unless
---labels is given.
+--labels is given. With --gold, the video is a gold (test-only) video: labels go
+to data/scene_classifier/gold_labels/<video_id>.json, marked "role": "gold",
+and are never extracted for training. A video is one or the other, never both.
+Label a gold game blind: before any draft of it exists.
 
 Keyboard Shortcuts:
     0-9, R, P, X, F : Start labeling with class (continuous mode - auto-extends until changed)
@@ -136,12 +139,16 @@ from PyQt5.QtWidgets import (
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from label_segments import (  # noqa: E402
+    GOLD_LABELS_DIR,
+    TRAINING_LABELS_DIR,
     EditError,
     GameLabels,
     SegmentLabel,
     VideoLabels,
+    default_labels_path,
     delete,
     frame_time,
+    is_gold,
     move_edge,
     overlaps,
     overwrite,
@@ -1035,10 +1042,11 @@ class SegmentStrip(QWidget):
 class SceneLabeler(QMainWindow):
     """Main labeling application window."""
 
-    def __init__(self, video_path: str, labels_path: str | None = None):
+    def __init__(self, video_path: str, labels_path: str | None = None, gold: bool = False):
         super().__init__()
         self.video_path = Path(video_path)
         self.labels_path = Path(labels_path) if labels_path else None
+        self.gold = gold  # a gold (test-only) video; also true if the loaded file says so
 
         self.video_labels: VideoLabels | None = None
         self.current_game_index = 0
@@ -1169,6 +1177,11 @@ class SceneLabeler(QMainWindow):
                 self.video_labels = VideoLabels.from_dict(data)
                 self.statusBar().showMessage(f"Loaded {len(self._current_game.labels)} labels")
             self._warn_overlaps()
+            if is_gold(self.video_labels.extra):
+                self.gold = True
+            self._saved_state = self._label_state()
+            if self.gold and not is_gold(self.video_labels.extra):
+                self.video_labels.extra["role"] = "gold"  # unsaved until Ctrl+S, shown by the title's *
         else:
             # Create new labels
             video_id = self.video_path.stem
@@ -1182,14 +1195,12 @@ class SceneLabeler(QMainWindow):
                         end_sec=self.player.get_duration(),
                     )
                 ],
+                extra={"role": "gold"} if self.gold else {},
             )
-            # Default labels path
             if not self.labels_path:
-                labels_dir = Path("data/scene_classifier/raw_labels")
-                labels_dir.mkdir(parents=True, exist_ok=True)
-                self.labels_path = labels_dir / f"{video_id}.json"
+                self.labels_path = default_labels_path(video_id, self.gold)
+            self._saved_state = self._label_state()
 
-        self._saved_state = self._label_state()
         self._update_ui()
 
     def _label_state(self) -> str:
@@ -1201,7 +1212,8 @@ class SceneLabeler(QMainWindow):
 
     def _update_title(self):
         mark = " *" if self._has_unsaved_changes() else ""
-        self.setWindowTitle(f"Scene Labeler - {self.video_path.name}{mark}")
+        gold = "[GOLD: test only] " if self.gold else ""
+        self.setWindowTitle(f"{gold}Scene Labeler - {self.video_path.name}{mark}")
 
     @property
     def _current_game(self) -> GameLabels:
@@ -1580,7 +1592,7 @@ class SceneLabeler(QMainWindow):
             path, _ = QFileDialog.getSaveFileName(
                 self,
                 "Save Labels",
-                str(Path("data/scene_classifier/raw_labels")),
+                str(GOLD_LABELS_DIR if self.gold else TRAINING_LABELS_DIR),
                 "JSON Files (*.json)",
             )
             if not path:
@@ -1659,6 +1671,12 @@ def main():
         "--labels", "-l",
         help="Path to labels JSON file (will be created if doesn't exist)",
     )
+    parser.add_argument(
+        "--gold",
+        action="store_true",
+        help="A gold (test-only) video: labels go to data/scene_classifier/gold_labels/ "
+        "and are never trained on. Label its game blind, before any draft exists.",
+    )
     args = parser.parse_args()
 
     app = QApplication(sys.argv)
@@ -1717,19 +1735,22 @@ def main():
 
             video_path = cache_path
 
-        # Set default labels path based on video ID
-        if not args.labels and video_id:
-            labels_dir = Path("data/scene_classifier/raw_labels")
-            labels_dir.mkdir(parents=True, exist_ok=True)
-            args.labels = str(labels_dir / f"{video_id}.json")
     else:
         # Local file
         video_path = Path(video_input)
         if not video_path.exists():
             print(f"Error: Video not found: {video_path}")
             sys.exit(1)
+        video_id = video_path.stem
 
-    window = SceneLabeler(str(video_path), args.labels)
+    if not args.labels and video_id:
+        try:
+            args.labels = str(default_labels_path(video_id, args.gold))
+        except ValueError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
+    window = SceneLabeler(str(video_path), args.labels, gold=args.gold)
     window.show()
 
     sys.exit(app.exec_())

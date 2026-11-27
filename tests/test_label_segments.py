@@ -255,3 +255,27 @@ def test_human_segments_join_but_draft_segments_do_not():
     assert _spans(ls.overwrite(legacy, 5.0, 7.0, "both_grounded"))[0] == (0.0, 7.0, "both_grounded")
     draft = ls.set_class(_draft(), 1, "one_airborne")   # still carries model fields: stays separate
     assert len(draft) == 2
+
+
+# gold (test-only) videos
+
+def test_a_video_is_either_training_or_gold_never_both(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert ls.default_labels_path("vidA", gold=False) == ls.TRAINING_LABELS_DIR / "vidA.json"
+    assert ls.default_labels_path("vidA", gold=True) == ls.GOLD_LABELS_DIR / "vidA.json"
+
+    ls.GOLD_LABELS_DIR.mkdir(parents=True)
+    (ls.GOLD_LABELS_DIR / "vidA.json").write_text("{}")
+    with pytest.raises(ValueError, match="--gold"):
+        ls.default_labels_path("vidA", gold=False)
+
+    ls.TRAINING_LABELS_DIR.mkdir(parents=True)
+    (ls.TRAINING_LABELS_DIR / "vidB.json").write_text("{}")
+    with pytest.raises(ValueError, match="cannot also be a gold video"):
+        ls.default_labels_path("vidB", gold=True)
+
+
+def test_the_gold_role_survives_load_and_save():
+    data = {"video_id": "v", "video_path": "", "games": [], "role": "gold"}
+    labels = ls.VideoLabels.from_dict(data)
+    assert ls.is_gold(labels.to_dict()) and labels.to_dict() == data

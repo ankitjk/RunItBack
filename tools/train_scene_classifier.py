@@ -361,8 +361,8 @@ def check_onnx_export(
 
 
 # The model the app loads (runitback/cv/scene_classifier.py). Training never
-# writes here: a retrained model has different classes and would break
-# inference until ISSUE-017 is fixed. Deploying a model is a separate, deliberate step.
+# writes here: deploying a model (its ONNX file and the class_mapping.json that
+# inference reads its classes from) is a separate, deliberate step.
 DEPLOYED_MODEL = Path("data/models/scene_classifier.onnx")
 
 

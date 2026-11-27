@@ -40,7 +40,7 @@ import cv2
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from label_segments import SCENE_CLASSES  # noqa: E402  (shared with the label tool and training)
+from label_segments import SCENE_CLASSES, is_gold  # noqa: E402  (shared with the label tool and training)
 
 # Rare classes get more frequent sampling
 RARE_CLASSES = {
@@ -145,6 +145,11 @@ def extract_frames_from_video(
     stats: ExtractionStats,
 ) -> None:
     """Extract frames from a video based on labels, replacing its earlier frames."""
+    if is_gold(labels):
+        # Gold videos are the test set: training on one would make its score
+        # an exam the model had already seen (plan step 4).
+        stats.errors.append(f"{video_path.name}: a gold (test-only) video; never extracted for training")
+        return
     # A class this script does not know used to be skipped without a word, so a
     # typo or a class added to the label tool but not here vanished from training.
     unknown = sorted({
