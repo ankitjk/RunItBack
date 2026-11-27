@@ -163,3 +163,52 @@ def test_an_overlap_is_marked_on_the_strips(labeler):
         image = strip.grab().toImage()
         x = int(strip.x_of(2.05) * image.width() / strip.width())
         assert image.pixelColor(x, 1).name().upper() == sl.OVERLAP_COLOR.upper()
+
+
+@pytest.fixture
+def close_prompts(monkeypatch):
+    """Record the save-before-closing prompt instead of showing it; answer Cancel."""
+    from PyQt5.QtWidgets import QMessageBox
+
+    asked = []
+
+    def fake_question(parent, title, text, buttons=None, default=None):
+        asked.append(text)
+        return QMessageBox.Cancel
+
+    monkeypatch.setattr(QMessageBox, "question", fake_question)
+    return asked
+
+
+def test_closing_without_changes_or_after_saving_does_not_ask(labeler, close_prompts):
+    window, press, spans = labeler
+    window.player.seek_frame(60)
+    press(Qt.Key_K)
+    assert window.windowTitle().endswith(" *"), "unsaved changes are shown in the title"
+    press(Qt.Key_S, Qt.ControlModifier)
+    assert not window.windowTitle().endswith(" *")
+    assert window.close() and close_prompts == []
+
+
+def test_closing_with_unsaved_changes_asks_and_cancel_keeps_the_window(labeler, close_prompts):
+    window, press, spans = labeler
+    window.player.seek_frame(60)
+    press(Qt.Key_K)
+    assert not window.close()
+    assert len(close_prompts) == 1 and "unsaved changes" in close_prompts[0]
+
+
+def test_undoing_back_to_the_saved_labels_counts_as_saved(labeler, close_prompts):
+    window, press, spans = labeler
+    window.player.seek_frame(60)
+    press(Qt.Key_K)
+    press(Qt.Key_Z, Qt.ControlModifier)
+    assert window.close() and close_prompts == []
+
+
+def test_closing_with_an_open_label_warns_that_it_is_not_saved(labeler, close_prompts):
+    window, press, spans = labeler
+    window.player.seek_frame(60)
+    press(Qt.Key_3)                    # opens a continuous label; nothing written yet
+    assert not window.close()
+    assert len(close_prompts) == 1 and "still open" in close_prompts[0]

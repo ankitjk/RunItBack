@@ -1025,6 +1025,7 @@ class SceneLabeler(QMainWindow):
         self.segment_start: float | None = None
         self.current_class: SceneState | None = None
         self.change_target: int | None = None  # C pressed: the next class key relabels this row
+        self._saved_state: str | None = None  # labels as last loaded or saved
         # Each entry: (game index, copy of every game) from before a change
         self.undo_stack: list[tuple[int, list[GameLabels]]] = []
 
@@ -1165,7 +1166,19 @@ class SceneLabeler(QMainWindow):
                 labels_dir.mkdir(parents=True, exist_ok=True)
                 self.labels_path = labels_dir / f"{video_id}.json"
 
+        self._saved_state = self._label_state()
         self._update_ui()
+
+    def _label_state(self) -> str:
+        """The labels as they would be saved, for comparing with the last save."""
+        return json.dumps(self.video_labels.to_dict(), sort_keys=True)
+
+    def _has_unsaved_changes(self) -> bool:
+        return self._label_state() != self._saved_state
+
+    def _update_title(self):
+        mark = " *" if self._has_unsaved_changes() else ""
+        self.setWindowTitle(f"Scene Labeler - {self.video_path.name}{mark}")
 
     @property
     def _current_game(self) -> GameLabels:
@@ -1178,6 +1191,7 @@ class SceneLabeler(QMainWindow):
         self.label_panel.update_game_info(game)
         self.label_panel.update_labels(game.labels)
         self.dist_panel.update_distribution(game.labels)
+        self._update_title()
         if select_at is not None:
             try:
                 self.label_panel.select_row(segment_at(game.labels, select_at))
@@ -1537,8 +1551,8 @@ class SceneLabeler(QMainWindow):
             f"New game started at {current_time:.3f}s. Press T to set stage."
         )
 
-    def _save_labels(self):
-        """Save labels to file."""
+    def _save_labels(self) -> bool:
+        """Save labels to file. Returns False if no file was chosen."""
         if self.labels_path is None:
             path, _ = QFileDialog.getSaveFileName(
                 self,
@@ -1547,7 +1561,8 @@ class SceneLabeler(QMainWindow):
                 "JSON Files (*.json)",
             )
             if not path:
-                return
+                self.statusBar().showMessage("Not saved: no file chosen")
+                return False
             self.labels_path = Path(path)
 
         # Ensure directory exists
@@ -1557,7 +1572,13 @@ class SceneLabeler(QMainWindow):
         with open(self.labels_path, "w") as f:
             json.dump(self.video_labels.to_dict(), f, indent=2)
 
-        self.statusBar().showMessage(f"Saved to {self.labels_path}")
+        self._saved_state = self._label_state()
+        self._update_title()
+        message = f"Saved to {self.labels_path}"
+        if self.current_class is not None:
+            message += f" (the open {self.current_class.value} label is not in it until E closes it)"
+        self.statusBar().showMessage(message)
+        return True
 
     def _undo_last(self):
         """Ctrl+Z: put the games back as they were before the last change."""
@@ -1570,17 +1591,29 @@ class SceneLabeler(QMainWindow):
         self.statusBar().showMessage(f"Undone ({len(self.undo_stack)} more change(s) can be undone)")
 
     def closeEvent(self, event):  # noqa: N802 - Qt override name
-        """Handle window close."""
-        # Check for unsaved changes
-        reply = QMessageBox.question(
-            self,
-            "Save Labels?",
-            "Do you want to save labels before closing?",
-            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-        )
+        """Close; ask first only if unsaved changes or an open label would be lost."""
+        unsaved = self._has_unsaved_changes()
+        open_label = self.current_class is not None
+        if not unsaved and not open_label:
+            self.player.cleanup()
+            event.accept()
+            return
+
+        lines = []
+        if unsaved:
+            lines.append("There are unsaved changes. Save before closing?")
+        if open_label:
+            lines.append(
+                f"A {self.current_class.value} label is still open from {self.segment_start:.3f}s. "
+                "It is not saved: Cancel, then press E to close it at the playhead."
+            )
+        buttons = (QMessageBox.Save if unsaved else QMessageBox.NoButton) | QMessageBox.Discard | QMessageBox.Cancel
+        reply = QMessageBox.question(self, "Save Labels?", "\n\n".join(lines), buttons)
 
         if reply == QMessageBox.Save:
-            self._save_labels()
+            if not self._save_labels():
+                event.ignore()  # no file chosen: closing would lose the labels
+                return
             self.player.cleanup()
             event.accept()
         elif reply == QMessageBox.Discard:
