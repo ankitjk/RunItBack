@@ -149,3 +149,17 @@ def test_clicking_a_strip_jumps_there_and_selects_the_segment(labeler):
     assert window.label_panel.selected_index() == 1
     press(Qt.Key_Delete)               # acts on the clicked segment
     assert spans() == [(0.0, 2.0, "both_grounded")]
+
+
+def test_an_overlap_is_marked_on_the_strips(labeler):
+    window, press, spans = labeler
+    sl = _load_tool("scene_labeler")
+    ls = _load_tool("label_segments")
+    # A file written by hand or by an old version can overlap; the strips must show it
+    window._current_game.labels = [ls.SegmentLabel(0.0, 2.1, "both_grounded"),
+                                   ls.SegmentLabel(2.0, 4.0, "one_airborne")]
+    window._update_ui()
+    for strip in (window.overview_strip, window.closeup_strip):
+        image = strip.grab().toImage()
+        x = int(strip.x_of(2.05) * image.width() / strip.width())
+        assert image.pixelColor(x, 1).name().upper() == sl.OVERLAP_COLOR.upper()

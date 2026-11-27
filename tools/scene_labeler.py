@@ -52,8 +52,8 @@ Editing Labels:
 Segment Strips (under the video slider):
     "Game" shows the whole current game; "10s" shows 10 seconds around the
     playhead, where single frames are visible. Segments are in their class
-    colour; dark is unlabelled; hatched is needs_review; a red band along the
-    top is an overlap; the selected segment is outlined; the mark or open label
+    colour; dark is unlabelled; hatched is needs_review; red cross-hatching
+    is an overlap; the selected segment is outlined; the mark or open label
     is shaded up to the playhead (white line). Click to jump there and select the
     segment; hover for its class and times. The strips only display labels.
     The Class Distribution panel shows labelled seconds per class, not counts.
@@ -788,7 +788,7 @@ class LegendPanel(QWidget):
 
         strips = QLabel(
             "<small><b>Strips:</b> click to jump and select. Hatched = needs review, "
-            "red band on top = overlap, dark = unlabelled.</small>"
+            "red cross-hatch = overlap, dark = unlabelled.</small>"
         )
         strips.setWordWrap(True)
         layout.addWidget(strips)
@@ -865,7 +865,7 @@ class SegmentStrip(QWidget):
     window_secs None draws the whole game; a number draws that many seconds
     centred on the playhead, where single frames are wide enough to see.
     Drawn: segments in their class colour, unlabelled time dark, needs_review
-    hatched, overlaps as a red band along the top, the selected segment
+    hatched, overlaps red cross-hatched (at least 6px wide), the selected segment
     outlined, the mark or open label shaded up to the playhead, and the
     playhead as a white line. Clicking emits the time and the segment under it.
     Display only: it never changes labels, and it never takes keyboard focus.
@@ -953,9 +953,18 @@ class SegmentStrip(QWidget):
                 p.drawLine(QPointF(x, h - 5), QPointF(x, h))
                 t += 1
 
+        # Overlaps: red cross-hatch over the full height, with solid red top and
+        # bottom edges, at least 6px wide so a 0.1s overlap shows on the game strip
+        cross = QBrush(QColor(OVERLAP_COLOR), Qt.DiagCrossPattern)
         for a, b in self._overlap_spans:
             if b > lo and a < hi:
-                p.fillRect(QRectF(self.x_of(a), 0, max(2.0, self.x_of(b) - self.x_of(a)), 4), QColor(OVERLAP_COLOR))
+                x0, x1 = self.x_of(a), self.x_of(b)
+                width = max(6.0, x1 - x0)
+                left = (x0 + x1) / 2 - width / 2
+                p.fillRect(QRectF(left, 0, width, h), QColor("black"))  # contrast on any class colour
+                p.fillRect(QRectF(left, 0, width, h), cross)
+                p.fillRect(QRectF(left, 0, width, 3), QColor(OVERLAP_COLOR))
+                p.fillRect(QRectF(left, h - 3, width, 3), QColor(OVERLAP_COLOR))
 
         if self.pending_start is not None:
             a, b = sorted((self.pending_start, self.playhead))

@@ -75,6 +75,45 @@ def test_overwrite_of_an_empty_span_or_with_the_same_class_is_refused(three):
         ls.overwrite(three, 12.0, 15.0, "both_grounded")
 
 
+@pytest.mark.parametrize("cls,expected", [
+    ("one_offstage", [(80.7, 84.6, "one_offstage"), (84.6, 86.2, "both_offstage")]),
+    ("both_offstage", [(80.7, 84.5, "one_offstage"), (84.5, 86.2, "both_offstage")]),
+])
+def test_overwriting_an_overlap_with_either_class_fixes_it(cls, expected):
+    # The shape of the real overlap in XUkRx6CpL04 game 1. It used to be refused
+    # as "already that class" because one of the two segments already had it.
+    labels = [Seg(80.7, 84.6, "one_offstage"), Seg(84.5, 86.2, "both_offstage")]
+    out = ls.overwrite(labels, 84.5, 84.6, cls)
+    assert ls.overlaps(out) == []
+    assert _spans(out) == expected
+
+
+def test_overwrite_joins_a_touching_segment_of_the_same_class(three):
+    out = ls.overwrite(three, 8.0, 10.0, "both_grounded")
+    assert _spans(out) == [(0.0, 8.0, "one_airborne"), (8.0, 20.0, "both_grounded"), (20.0, 30.0, "one_offstage")]
+
+
+def test_overwrite_does_not_join_a_draft_segment():
+    labels = [Seg(0.0, 5.0, "both_grounded", {"needs_review": True}), Seg(5.0, 9.0, "one_airborne")]
+    out = ls.overwrite(labels, 5.0, 7.0, "both_grounded")
+    assert _spans(out) == [(0.0, 5.0, "both_grounded"), (5.0, 7.0, "both_grounded"), (7.0, 9.0, "one_airborne")]
+
+
+def test_joining_takes_only_the_immediate_neighbours():
+    # Existing cuts between same-class segments (e.g. the airborne player
+    # switching) are left alone; only the edited segment's neighbours join.
+    labels = [Seg(0.0, 1.0, "one_airborne"), Seg(1.0, 2.0, "one_airborne"), Seg(2.0, 3.0, "both_grounded")]
+    out = ls.overwrite(labels, 2.0, 3.0, "one_airborne")
+    assert _spans(out) == [(0.0, 1.0, "one_airborne"), (1.0, 3.0, "one_airborne")]
+
+
+def test_changing_a_class_joins_neighbours_but_cutting_does_not(three):
+    joined = ls.set_class(three, 1, "one_airborne")
+    assert _spans(joined) == [(0.0, 20.0, "one_airborne"), (20.0, 30.0, "one_offstage")]
+    cut = ls.split(three, 1, 15.0)
+    assert len(cut) == 4
+
+
 def test_overwrite_keeps_the_other_fields_on_the_pieces_left_over():
     draft = [Seg(0.0, 10.0, "one_airborne", {"source": "model", "needs_review": True})]
     out = ls.overwrite(draft, 3.0, 4.0, "one_on_ledge")

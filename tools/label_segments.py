@@ -148,14 +148,18 @@ def overwrite(labels: list[SegmentLabel], start: float, end: float, scene_class:
     """Label [start, end) as scene_class, replacing whatever covered that time.
 
     Segments inside the span are removed, segments crossing one of its edges are
-    trimmed to it, and a segment covering the whole span is cut around it.
+    trimmed to it, and a segment covering the whole span is cut around it. The
+    new segment is joined with a touching segment of the same class.
     """
     start, end = min(start, end), max(start, end)
     if end - start <= EPS:
         raise EditError("Nothing to label: the start and end are the same frame")
-    for s in labels:
-        if s.scene_class == scene_class and s.start_sec <= start + EPS and s.end_sec >= end - EPS:
-            raise EditError(f"Already {scene_class} ({s.describe()}); nothing changed")
+    # Nothing to do only if one segment of this class covers the span and no
+    # other segment overlaps it; with an overlap, overwriting is how it is fixed.
+    touching = [s for s in labels if s.start_sec < end - EPS and s.end_sec > start + EPS]
+    if (len(touching) == 1 and touching[0].scene_class == scene_class
+            and touching[0].start_sec <= start + EPS and touching[0].end_sec >= end - EPS):
+        raise EditError(f"Already {scene_class} ({touching[0].describe()}); nothing changed")
 
     out = []
     for s in labels:
@@ -166,8 +170,32 @@ def overwrite(labels: list[SegmentLabel], start: float, end: float, scene_class:
             out.append(_piece(s, s.start_sec, start))
         if s.end_sec > end + EPS:
             out.append(_piece(s, end, s.end_sec))
-    out.append(SegmentLabel(start, end, scene_class))
-    return _sorted(out)
+    new = SegmentLabel(start, end, scene_class)
+    return _join_neighbours(out, new)
+
+
+def _join_neighbours(others: list[SegmentLabel], seg: SegmentLabel) -> list[SegmentLabel]:
+    """Add seg to others, joined with any touching segment of the same class.
+
+    Two touching segments of one class mean the same as one, and the cut between
+    them costs training frames (extraction skips each segment's edges). Only
+    segments without extra fields are joined: a draft segment carrying
+    needs_review or a model guess keeps its own identity until it is reviewed.
+    """
+    if seg.extra:
+        return _sorted([*others, seg])
+    # Compared with seg's own edges, so only its immediate neighbours join,
+    # whatever order the list is in.
+    start, end, kept = seg.start_sec, seg.end_sec, []
+    for s in others:
+        joinable = s.scene_class == seg.scene_class and not s.extra
+        if joinable and abs(s.end_sec - seg.start_sec) <= EPS:
+            start = s.start_sec
+        elif joinable and abs(s.start_sec - seg.end_sec) <= EPS:
+            end = s.end_sec
+        else:
+            kept.append(s)
+    return _sorted([*kept, replace(seg, start_sec=start, end_sec=end, extra={})])
 
 
 def split(labels: list[SegmentLabel], index: int, t: float) -> list[SegmentLabel]:
@@ -180,13 +208,15 @@ def split(labels: list[SegmentLabel], index: int, t: float) -> list[SegmentLabel
 
 
 def set_class(labels: list[SegmentLabel], index: int, scene_class: str) -> list[SegmentLabel]:
-    """Give segment `index` another class, keeping its times and fields."""
+    """Give segment `index` another class, keeping its times and fields.
+
+    Joined with a touching segment of the new class, as overwrite does.
+    """
     s = labels[index]
     if s.scene_class == scene_class:
         raise EditError(f"Already {scene_class}; nothing changed")
-    out = list(labels)
-    out[index] = replace(s, scene_class=scene_class, extra=dict(s.extra))
-    return _sorted(out)
+    others = [o for i, o in enumerate(labels) if i != index]
+    return _join_neighbours(others, replace(s, scene_class=scene_class, extra=dict(s.extra)))
 
 
 def delete(labels: list[SegmentLabel], index: int) -> list[SegmentLabel]:
