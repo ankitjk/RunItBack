@@ -48,6 +48,9 @@ Editing Labels:
       click jumps to it), or else the one under the playhead.
     - Edits are refused while a continuous label is open: E closes it, Esc drops it.
     Fields this tool does not use (e.g. needs_review in a draft) are kept on save.
+    A segment you create, change the class of, or move an edge of is marked
+    source "human"; pieces left over from a cut or an overwrite keep their own
+    source, since nobody judged them (rules in label_segments.py).
 
 Segment Strips (under the video slider):
     "Game" shows the whole current game; "10s" shows 10 seconds around the

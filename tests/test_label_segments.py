@@ -117,7 +117,7 @@ def test_changing_a_class_joins_neighbours_but_cutting_does_not(three):
 def test_overwrite_keeps_the_other_fields_on_the_pieces_left_over():
     draft = [Seg(0.0, 10.0, "one_airborne", {"source": "model", "needs_review": True})]
     out = ls.overwrite(draft, 3.0, 4.0, "one_on_ledge")
-    assert [s.extra for s in out] == [{"source": "model", "needs_review": True}, {},
+    assert [s.extra for s in out] == [{"source": "model", "needs_review": True}, {"source": "human"},
                                       {"source": "model", "needs_review": True}]
     out[0].extra["needs_review"] = False
     assert out[2].extra["needs_review"] is True, "pieces must not share one dict"
@@ -140,7 +140,8 @@ def test_split_on_an_edge_is_refused(three):
 
 def test_set_class_keeps_times_and_fields():
     out = ls.set_class([Seg(1.0, 2.0, "respawning", {"model_label": "respawning"})], 0, "game_end")
-    assert _spans(out) == [(1.0, 2.0, "game_end")] and out[0].extra == {"model_label": "respawning"}
+    assert _spans(out) == [(1.0, 2.0, "game_end")]
+    assert out[0].extra == {"model_label": "respawning", "source": "human"}
 
 
 def test_delete_leaves_the_time_unlabelled(three):
@@ -210,3 +211,47 @@ def test_real_label_files_load_and_save_unchanged():
     for path in LABELS.glob("*.json"):
         data = json.loads(path.read_text())
         assert ls.VideoLabels.from_dict(data).to_dict() == data, path.name
+
+
+# source: who decided a segment's class (rule agreed with runitback-labeler)
+
+DRAFT = {"source": "model", "needs_review": True, "model_label": "one_airborne",
+         "llm_label": None, "mean_confidence": 0.81, "min_confidence": 0.42}
+
+
+def _draft():
+    return [Seg(0.0, 10.0, "one_airborne", dict(DRAFT)), Seg(10.0, 20.0, "both_grounded", dict(DRAFT))]
+
+
+def test_a_segment_a_person_creates_is_human_and_the_leftovers_keep_the_draft_fields():
+    out = ls.overwrite(_draft(), 4.0, 6.0, "one_on_ledge")
+    assert [s.extra for s in out] == [DRAFT, {"source": "human"}, DRAFT, DRAFT]
+
+
+def test_changing_a_class_makes_it_human_but_keeps_the_proposal_and_review_flag():
+    out = ls.set_class(_draft(), 0, "both_airborne")
+    assert out[0].extra == {**DRAFT, "source": "human"}
+    assert out[0].extra["model_label"] == "one_airborne" and out[0].extra["needs_review"] is True
+    assert out[1].extra == DRAFT
+
+
+def test_moving_an_edge_makes_both_sides_of_it_human():
+    labels = _draft() + [Seg(20.0, 30.0, "one_offstage", dict(DRAFT))]
+    out = ls.move_edge(labels, 1, "start", 9.0)
+    assert out[0].extra == out[1].extra == {**DRAFT, "source": "human"}
+    assert out[2].extra == DRAFT, "a segment the edge did not touch is unchanged"
+
+
+def test_a_cut_decides_nothing_so_both_pieces_keep_their_source():
+    out = ls.split(_draft(), 0, 5.0)
+    assert [s.extra for s in out[:2]] == [DRAFT, DRAFT]
+
+
+def test_human_segments_join_but_draft_segments_do_not():
+    plain = [Seg(0.0, 5.0, "both_grounded", {"source": "human"}), Seg(5.0, 9.0, "one_airborne")]
+    joined = ls.overwrite(plain, 5.0, 7.0, "both_grounded")
+    assert _spans(joined)[0] == (0.0, 7.0, "both_grounded") and joined[0].extra == {"source": "human"}
+    legacy = [Seg(0.0, 5.0, "both_grounded"), Seg(5.0, 9.0, "one_airborne")]   # labelled before source existed
+    assert _spans(ls.overwrite(legacy, 5.0, 7.0, "both_grounded"))[0] == (0.0, 7.0, "both_grounded")
+    draft = ls.set_class(_draft(), 1, "one_airborne")   # still carries model fields: stays separate
+    assert len(draft) == 2

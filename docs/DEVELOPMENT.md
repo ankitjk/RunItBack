@@ -31,15 +31,16 @@ The changelog of RunItBack: what changed in each session, why, and what was meas
   - **Segment strips** (`SegmentStrip`, second commit), under the video slider: the whole game, and 10s around the playhead, where single frames are visible (at ~0.27s per pixel the whole-game strip cannot show a finishing-blow flash). Segments in their class colour; unlabelled time dark; `needs_review` hatched; overlaps red cross-hatched on black, at least 6px wide (a first version drew a 4px band along the top, which the owner did not notice during a real relabel: at 0.1s it was a 2px fleck); the selection outlined; the mark or open label shaded to the playhead. Click to jump and select; hover for class and times. The table of 216-352 rows per game showed none of this at a glance. Display only: the strips never change labels and never take keyboard focus.
   - Screenshots of the off-screen window showed three display problems, fixed: the red playhead vanished on `both_offstage` (now white with a black outline); the legend overlapped itself and left the table 2 rows high (now two columns in a scroll area, with compact distribution rows; the table shows ~9 rows at 900px); and class names in the table were white on the light table background, so the Class column looked empty (now black on the class colour). The last predates this work.
   - The Class Distribution panel shows labelled seconds per class instead of segment counts: training frames come from time.
+  - **`source` on edited segments** (`label_segments.py`), agreed with the runitback-labeler session: `source` says who decided a segment's class. A segment a person creates, changes the class of (C), or moves an edge of ([ or ], on both sides of the edge) gets `source: "human"`. Pieces left by a cut or trimmed by an overwrite keep their source and every draft field, because nobody judged them; the labeller asked for this over my first proposal, which marked them human and would have made unreviewed proposals look confirmed. No edit changes `needs_review`, `model_label` or `llm_label`. Joining now treats a segment whose only extra field is `source: "human"` as plain. Before this, C on a draft segment left `source: "model"` on a class a person chose. The draft fields named in the plan were corrected: the drafts write `mean_confidence` and `min_confidence`, not `confidence`, plus a per-game `produced_by` block; all are kept on save (checked: a draft with every field loads and saves identically).
   - Closing asked "save before closing?" every time, even right after Ctrl+S (the owner hit this after the first real relabel): the tool never tracked unsaved changes. It now compares the labels with the last load or save, asks only if they differ, and shows `*` in the window title while they do (undoing back to the saved labels counts as saved). Also from the old code: choosing Save when no file got chosen closed the window and lost the labels; it now stays open. Closing with a continuous label still open warns that it is not saved until E closes it.
 - `tools/label_segments.py`, found before merge while planning a real relabel: `overwrite` refused to fix the game-1 overlap with either class ("Already one_offstage"), because its nothing-to-do check saw one segment of that class covering the span and ignored the other segment overlapping it. It now refuses only when no other segment overlaps the span.
 - `tools/label_segments.py`, also from that relabel: overwriting the overlap as `both_offstage` left `both_offstage` 84.5-84.6 and 84.6-86.2 as two touching segments, because an overwrite kept the leftover pieces of its neighbours separate. Overwrite and change-class (C) now join the edited segment with an immediately touching segment of the same class. Segments carrying extra fields (a draft's `needs_review` or model guess) are never joined, and K still cuts on purpose. The 20 touching same-class pairs already in `XUkRx6CpL04` (all `one_airborne`, probably cut where the airborne player switched) are left as they are.
-- `tests/test_label_segments.py` (new, 27 tests) - each edit, refusals, joining (and not joining drafts or non-neighbours), no overlaps after a sequence of overwrites, fields kept on the pieces, frame times mapping back to their frame at 60/59.94/30/29.97fps, and every real label file loading and saving unchanged.
+- `tests/test_label_segments.py` (new, 32 tests) - each edit, refusals, joining (and not joining drafts or non-neighbours), the `source` rule for each kind of edit, no overlaps after a sequence of overwrites, fields kept on the pieces, frame times mapping back to their frame at 60/59.94/30/29.97fps, and every real label file loading and saving unchanged.
 - `tests/test_scene_labeler_keys.py` (new, 11 tests) - drives the window with real key presses on a generated 4-second video: the mark (ISSUE-024), a refused mark edit not leaving the mark behind, continuous labelling replacing labels (ISSUE-025), and cut, change, move, delete, then Ctrl+Z back to the file exactly. Two more check the strips: the colour drawn at a time matches its class and changes after an edit, a click jumps there and selects the segment for Delete, an overlap is drawn on both strips, and closing asks only when unsaved changes or an open label would be lost. Skipped where PyQt5 is not installed.
 - `docs/ARCHITECTURE.md`, `CLAUDE.md` - the label tool's editing rules and the new module.
 
 **Results:**
-- Fast suite: 122 passed, 6 xfailed (84 passed before; 38 new). The 6 expected failures are the known-bug tests for ISSUE-001, -002, -003 and -014, unchanged.
+- Fast suite: 127 passed, 6 xfailed (84 passed before; 43 new). The 6 expected failures are the known-bug tests for ISSUE-001, -002, -003 and -014, unchanged.
 - Off-screen run of the real tool on a copy of `XUkRx6CpL04.json` with the cached video (60fps): mark relabel, continuous relabel, cut, change, edge move, Delete with the table focused, and refusals all behaved as above, with no new overlaps. Ctrl+Z back to the start reproduced the file exactly, and the ground-truth file's checksum was unchanged.
 - Not yet used by a person on a real relabel; that is step 3.
 
@@ -1001,8 +1002,12 @@ means relabelling every labelled video, so all three new classes go in at once
      segments never overlap.
    - Store exact times instead of rounding to 0.1s.
    - Keep fields the tool doesn't know (`source`, `needs_review`,
-     `model_label`, `llm_label`, `llm_reason`, `confidence`, and the format-1
-     game fields).
+     `model_label`, `llm_label`, `llm_reason`, `mean_confidence`,
+     `min_confidence`, and the format-1 game fields including `produced_by`).
+   - `source` records who decided a segment's class (agreed with
+     runitback-labeler 2026-11-27): `human` when a person creates a segment,
+     changes its class, or moves one of its edges; unchanged on pieces left by
+     a cut or an overwrite.
 3. **The three new classes, end to end.**
    - Keys in the label tool (0-9 and R are taken; proposed P = `pre_game`,
      X = `game_end`, F = `finishing_blow`).
@@ -1058,8 +1063,11 @@ means relabelling every labelled video, so all three new classes go in at once
      cut off. Sets `bounds_confirmed` and `ends_with_game_screen`.
    - **Review mode:** N jumps to the next `needs_review` segment, Enter accepts
      the proposed class, the class keys change it. A side panel shows the
-     model's and the LLM's label and the LLM's reason. Accepting or changing
-     sets `source=human` and clears `needs_review`.
+     model's and the LLM's label and the LLM's reason, `min_confidence` (the
+     least sure sampled frame; `mean_confidence` too if there is room), and the
+     game's `produced_by` (scene-model hash and folder name, LLM model and
+     prompt id). Accepting or changing sets `source=human` and clears
+     `needs_review`.
    - A game is saved as `labelled` only when its bounds are confirmed and no
      segment needs review.
    - **Extraction** (`extract_labeled_frames.py`): games that are not

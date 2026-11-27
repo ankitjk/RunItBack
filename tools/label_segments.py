@@ -5,10 +5,17 @@ Every edit here returns a new, sorted segment list and leaves the input alone, o
 raises EditError saying why it was refused. No edit creates an overlap: labelling
 time that is already labelled replaces what was there.
 
-Fields this tool does not use (for example `source` or `needs_review` written by
-the runitback-labeler drafts) are kept in `extra` and written back on save, so
-opening and saving a file never drops them. A segment cut in two keeps them on
-both pieces.
+Fields this tool does not use (for example `needs_review` or `model_label`
+written by the runitback-labeler drafts) are kept in `extra` and written back on
+save, so opening and saving a file never drops them.
+
+`source` says who decided a segment's class (agreed with runitback-labeler):
+- "human" on a segment a person creates, whose class a person changes, or
+  whose edge a person moves (both segments meeting at that edge);
+- unchanged on a piece left over from a cut or trimmed by an overwrite: nobody
+  judged that piece, so its class is still the draft's proposal, and it keeps
+  all its draft fields;
+- no edit changes `needs_review`, `model_label` or `llm_label`.
 """
 
 from dataclasses import dataclass, field, replace
@@ -20,6 +27,7 @@ TIME_DECIMALS = 4
 EPS = 1e-6
 
 _SEGMENT_KEYS = {"start_sec", "end_sec", "class", "scene_class"}
+HUMAN = {"source": "human"}
 _GAME_KEYS = {"game_number", "stage", "start_sec", "end_sec", "labels"}
 _VIDEO_KEYS = {"video_id", "video_path", "games"}
 
@@ -120,8 +128,18 @@ def _sorted(labels: list[SegmentLabel]) -> list[SegmentLabel]:
 
 
 def _piece(segment: SegmentLabel, start: float, end: float) -> SegmentLabel:
-    """Part of a segment, keeping its class and its other fields."""
+    """Part of a segment, keeping its class and all its fields, source included."""
     return replace(segment, start_sec=start, end_sec=end, extra=dict(segment.extra))
+
+
+def _decided(segment: SegmentLabel, **changes) -> SegmentLabel:
+    """The segment after a person judged it: source "human", other fields kept."""
+    return replace(segment, **changes, extra={**segment.extra, **HUMAN})
+
+
+def _plain(segment: SegmentLabel) -> bool:
+    """No draft fields: nothing but (at most) source "human". Only plain segments join."""
+    return segment.extra in ({}, HUMAN)
 
 
 def segment_at(labels: list[SegmentLabel], t: float) -> int | None:
@@ -170,7 +188,7 @@ def overwrite(labels: list[SegmentLabel], start: float, end: float, scene_class:
             out.append(_piece(s, s.start_sec, start))
         if s.end_sec > end + EPS:
             out.append(_piece(s, end, s.end_sec))
-    new = SegmentLabel(start, end, scene_class)
+    new = SegmentLabel(start, end, scene_class, dict(HUMAN))
     return _join_neighbours(out, new)
 
 
@@ -179,27 +197,31 @@ def _join_neighbours(others: list[SegmentLabel], seg: SegmentLabel) -> list[Segm
 
     Two touching segments of one class mean the same as one, and the cut between
     them costs training frames (extraction skips each segment's edges). Only
-    segments without extra fields are joined: a draft segment carrying
+    plain segments are joined (see _plain): a draft segment carrying
     needs_review or a model guess keeps its own identity until it is reviewed.
+    The joined segment is source "human", since a person made the edit.
     """
-    if seg.extra:
+    if not _plain(seg):
         return _sorted([*others, seg])
     # Compared with seg's own edges, so only its immediate neighbours join,
     # whatever order the list is in.
     start, end, kept = seg.start_sec, seg.end_sec, []
     for s in others:
-        joinable = s.scene_class == seg.scene_class and not s.extra
+        joinable = s.scene_class == seg.scene_class and _plain(s)
         if joinable and abs(s.end_sec - seg.start_sec) <= EPS:
             start = s.start_sec
         elif joinable and abs(s.start_sec - seg.end_sec) <= EPS:
             end = s.end_sec
         else:
             kept.append(s)
-    return _sorted([*kept, replace(seg, start_sec=start, end_sec=end, extra={})])
+    return _sorted([*kept, replace(seg, start_sec=start, end_sec=end, extra=dict(HUMAN))])
 
 
 def split(labels: list[SegmentLabel], index: int, t: float) -> list[SegmentLabel]:
-    """Cut segment `index` in two at time t. Both pieces keep its class and fields."""
+    """Cut segment `index` in two at time t. Both pieces keep its class and all its fields.
+
+    A cut decides nothing about either piece's class, so source is not changed.
+    """
     s = labels[index]
     if not s.start_sec + EPS < t < s.end_sec - EPS:
         raise EditError(f"{t:.3f}s is not inside {s.describe()}; nothing to cut")
@@ -208,7 +230,7 @@ def split(labels: list[SegmentLabel], index: int, t: float) -> list[SegmentLabel
 
 
 def set_class(labels: list[SegmentLabel], index: int, scene_class: str) -> list[SegmentLabel]:
-    """Give segment `index` another class, keeping its times and fields.
+    """Give segment `index` another class: source becomes "human", other fields are kept.
 
     Joined with a touching segment of the new class, as overwrite does.
     """
@@ -216,7 +238,7 @@ def set_class(labels: list[SegmentLabel], index: int, scene_class: str) -> list[
     if s.scene_class == scene_class:
         raise EditError(f"Already {scene_class}; nothing changed")
     others = [o for i, o in enumerate(labels) if i != index]
-    return _join_neighbours(others, replace(s, scene_class=scene_class, extra=dict(s.extra)))
+    return _join_neighbours(others, _decided(s, scene_class=scene_class))
 
 
 def delete(labels: list[SegmentLabel], index: int) -> list[SegmentLabel]:
@@ -228,8 +250,9 @@ def move_edge(labels: list[SegmentLabel], index: int, edge: str, t: float) -> li
     """Move segment `index`'s start or end to time t.
 
     The segment that shares that edge moves with it, so no gap or overlap opens
-    between them. Refused if either would become empty or the segment would run
-    into another one (use overwrite for that).
+    between them. Both get source "human": placing the edge is a judgement about
+    where one class ends and the next begins. Refused if either would become
+    empty or the segment would run into another one (use overwrite for that).
     """
     if edge not in ("start", "end"):
         raise ValueError(f"edge must be 'start' or 'end', not {edge!r}")
@@ -247,7 +270,7 @@ def move_edge(labels: list[SegmentLabel], index: int, edge: str, t: float) -> li
     if len(shares) > 1:
         raise EditError(f"Several segments meet at {old:.3f}s; fix the overlap first")
     out = list(labels)
-    out[index] = replace(s, start_sec=new_start, end_sec=new_end, extra=dict(s.extra))
+    out[index] = _decided(s, start_sec=new_start, end_sec=new_end)
     if shares:
         j = shares[0]
         n = labels[j]
@@ -255,7 +278,7 @@ def move_edge(labels: list[SegmentLabel], index: int, edge: str, t: float) -> li
         if n_end - n_start <= EPS:
             raise EditError(f"Moving the {edge} to {t:.3f}s would swallow {n.describe()}; "
                             "delete it or overwrite instead")
-        out[j] = replace(n, start_sec=n_start, end_sec=n_end, extra=dict(n.extra))
+        out[j] = _decided(n, start_sec=n_start, end_sec=n_end)
 
     for i, o in enumerate(out):
         if i == index or (shares and i == shares[0]):
